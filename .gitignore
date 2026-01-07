@@ -21,9 +21,9 @@ dist/
 Thumbs.db
 
 # Large files
-*/log/
-*/mesh/
-*.jpg
-*.png
-*.dae
-*.ply
+# */log/
+# */mesh/
+# *.jpg
+# *.png
+# *.dae
+# *.ply
