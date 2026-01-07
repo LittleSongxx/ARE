@@ -19,3 +19,11 @@ dist/
 # OS
 .DS_Store
 Thumbs.db
+
+# Large files
+*/log/
+*/mesh/
+*.jpg
+*.png
+*.dae
+*.ply
