@@ -46,33 +46,9 @@ class Runner:
 
         # graph related
         parameter.NODE_RESOLUTION = rospy.get_param('~node_resolution', parameter.NODE_RESOLUTION)
-        parameter.ENABLE_DYNAMIC_RESOLUTION = rospy.get_param('~enable_dynamic_resolution', parameter.ENABLE_DYNAMIC_RESOLUTION)
-        parameter.MIN_NODE_RESOLUTION = rospy.get_param('~min_node_resolution', parameter.MIN_NODE_RESOLUTION)
-        parameter.MAX_NODE_RESOLUTION = rospy.get_param('~max_node_resolution', parameter.MAX_NODE_RESOLUTION)
-        parameter.NARROW_THRESHOLD = rospy.get_param('~narrow_threshold', parameter.NARROW_THRESHOLD)
         parameter.CLUSTER_RANGE = rospy.get_param('~frontier_cluster_range', parameter.CLUSTER_RANGE)
         parameter.THR_NEXT_WAYPOINT = rospy.get_param('~next_waypoint_threshold', parameter.THR_NEXT_WAYPOINT)
         parameter.THR_GRAPH_HARD_UPDATE = rospy.get_param('~hard_update_threshold', parameter.THR_GRAPH_HARD_UPDATE)
-
-        # directional bias related
-        parameter.USE_DIRECTIONAL_BIAS = rospy.get_param('~use_directional_bias', parameter.USE_DIRECTIONAL_BIAS)
-        parameter.DIRECTIONAL_BIAS_ALPHA = rospy.get_param('~directional_bias_alpha', parameter.DIRECTIONAL_BIAS_ALPHA)
-
-        # incremental community update related
-        parameter.ENABLE_INCREMENTAL_COMMUNITY_UPDATE = rospy.get_param('~enable_incremental_community_update', parameter.ENABLE_INCREMENTAL_COMMUNITY_UPDATE)
-        parameter.INCREMENTAL_UPDATE_THRESHOLD_FACTOR = rospy.get_param('~incremental_update_threshold_factor', parameter.INCREMENTAL_UPDATE_THRESHOLD_FACTOR)
-
-        # reachability check related
-        parameter.ENABLE_COMMUNITY_REACHABILITY_CHECK = rospy.get_param('~enable_community_reachability_check', parameter.ENABLE_COMMUNITY_REACHABILITY_CHECK)
-
-        # collision detection related
-        parameter.ENABLE_ENHANCED_COLLISION_CHECK = rospy.get_param('~enable_enhanced_collision_check', parameter.ENABLE_ENHANCED_COLLISION_CHECK)
-        parameter.COLLISION_CHECK_RADIUS = 1 if parameter.ENABLE_ENHANCED_COLLISION_CHECK else 0
-
-        # jump connection related (only effective when dynamic resolution is enabled)
-        parameter.JUMP_SEARCH_RADIUS_FACTOR = rospy.get_param('~jump_search_radius_factor', parameter.JUMP_SEARCH_RADIUS_FACTOR)
-        parameter.JUMP_MIN_DISTANCE_FACTOR = rospy.get_param('~jump_min_distance_factor', parameter.JUMP_MIN_DISTANCE_FACTOR)
-        parameter.JUMP_MAX_DISTANCE_FACTOR = rospy.get_param('~jump_max_distance_factor', parameter.JUMP_MAX_DISTANCE_FACTOR)
 
         # replanning related
         parameter.THR_TO_WAYPOINT = rospy.get_param('~waypoint_threshold', parameter.THR_TO_WAYPOINT)
@@ -80,6 +56,41 @@ class Runner:
         parameter.ENABLE_SAVE_MODE = rospy.get_param('~enable_save_mode', parameter.ENABLE_SAVE_MODE)
         parameter.ENABLE_DSTARLITE = rospy.get_param('~enable_dstarlite', parameter.ENABLE_DSTARLITE)
         frequency = rospy.get_param('~replanning_frequency', 2.5)
+
+        # ============== 新增性能优化参数 ==============
+        # 碰撞检测优化
+        parameter.ALLOW_UNKNOWN_PASSTHROUGH = rospy.get_param('~allow_unknown_passthrough', parameter.ALLOW_UNKNOWN_PASSTHROUGH)
+        parameter.UNKNOWN_TOLERANCE_CELLS = rospy.get_param('~unknown_tolerance_cells', parameter.UNKNOWN_TOLERANCE_CELLS)
+        parameter.SOFT_COLLISION_CHECK = rospy.get_param('~soft_collision_check', parameter.SOFT_COLLISION_CHECK)
+
+        # 邻居节点发现优化
+        parameter.EXTENDED_NEIGHBOR_RANGE = rospy.get_param('~extended_neighbor_range', parameter.EXTENDED_NEIGHBOR_RANGE)
+        parameter.NEIGHBOR_MATRIX_SIZE = rospy.get_param('~neighbor_matrix_size', parameter.NEIGHBOR_MATRIX_SIZE)
+
+        # 图连通性优化
+        parameter.DELAYED_NODE_REMOVAL = rospy.get_param('~delayed_node_removal', parameter.DELAYED_NODE_REMOVAL)
+        parameter.NODE_REMOVAL_DELAY_STEPS = rospy.get_param('~node_removal_delay_steps', parameter.NODE_REMOVAL_DELAY_STEPS)
+
+        # 前沿点处理优化
+        parameter.DISTANCE_WEIGHTED_UTILITY = rospy.get_param('~distance_weighted_utility', parameter.DISTANCE_WEIGHTED_UTILITY)
+        parameter.UTILITY_DISTANCE_DECAY = rospy.get_param('~utility_distance_decay', parameter.UTILITY_DISTANCE_DECAY)
+
+        # D*-Lite优化
+        parameter.DSTARLITE_MAX_TIME = rospy.get_param('~dstarlite_max_time', parameter.DSTARLITE_MAX_TIME)
+        parameter.DSTARLITE_ADAPTIVE_TIME = rospy.get_param('~dstarlite_adaptive_time', parameter.DSTARLITE_ADAPTIVE_TIME)
+
+        # 狭窄通道检测
+        parameter.ENABLE_NARROW_PASSAGE_DETECTION = rospy.get_param('~enable_narrow_passage_detection', parameter.ENABLE_NARROW_PASSAGE_DETECTION)
+        parameter.NARROW_PASSAGE_WIDTH_THRESHOLD = rospy.get_param('~narrow_passage_width_threshold', parameter.NARROW_PASSAGE_WIDTH_THRESHOLD)
+
+        # 图连通性检查优化
+        parameter.USE_CURRENT_LOCATION_FOR_CONNECTIVITY = rospy.get_param('~use_current_location_for_connectivity', parameter.USE_CURRENT_LOCATION_FOR_CONNECTIVITY)
+
+        # RL策略选择
+        parameter.GREEDY_ACTION_SELECTION = rospy.get_param('~greedy_action_selection', parameter.GREEDY_ACTION_SELECTION)
+
+        # 打印启用的优化功能
+        self.log_optimization_settings()
 
         # network model file
         self.model_file = "checkpoint.pth"
@@ -277,11 +288,7 @@ class Runner:
         t3 = time.time()
 
         # network inference to get next waypoint
-        next_location, next_node_index = self.robot.select_next_waypoint(
-            observation, 
-            use_directional_bias=parameter.USE_DIRECTIONAL_BIAS,
-            alpha=parameter.DIRECTIONAL_BIAS_ALPHA
-        )
+        next_location, next_node_index = self.robot.select_next_waypoint(observation)
 
         self.next_waypoint_list.append(next_location)
         if len(self.history_waypoint_list) > 0:
@@ -293,11 +300,7 @@ class Runner:
         # planning one more step if next node's utility is zero
         if self.robot.node_manager.nodes_dict.find(next_location.tolist()).data.utility == 0:
             next_observation = self.robot.get_next_observation(next_node_index, observation)
-            next_next_location, _ = self.robot.select_next_waypoint(
-                next_observation,
-                use_directional_bias=parameter.USE_DIRECTIONAL_BIAS,
-                alpha=parameter.DIRECTIONAL_BIAS_ALPHA
-            )
+            next_next_location, _ = self.robot.select_next_waypoint(next_observation)
 
             # if next waypoint is too close, go to the next next waypoint
             if np.linalg.norm(next_location - self.robot_location) < parameter.NODE_RESOLUTION:
@@ -333,6 +336,54 @@ class Runner:
         self.step += 1
         if self.publish_graph:
             self.visualize_graph()
+
+    def log_optimization_settings(self):
+        """打印启用的优化功能设置"""
+        rospy.loginfo("=" * 50)
+        rospy.loginfo("ARiADNE2 Optimization Settings:")
+        rospy.loginfo("=" * 50)
+        
+        # 碰撞检测优化
+        if parameter.SOFT_COLLISION_CHECK:
+            rospy.loginfo("[ENABLED] Soft Collision Check - UNKNOWN areas are passable")
+        elif parameter.ALLOW_UNKNOWN_PASSTHROUGH:
+            rospy.loginfo(f"[ENABLED] Unknown Passthrough - tolerance: {parameter.UNKNOWN_TOLERANCE_CELLS} cells")
+        else:
+            rospy.loginfo("[DEFAULT] Standard Collision Check")
+        
+        # 邻居节点发现优化
+        if parameter.EXTENDED_NEIGHBOR_RANGE:
+            rospy.loginfo(f"[ENABLED] Extended Neighbor Range - matrix size: {parameter.NEIGHBOR_MATRIX_SIZE}x{parameter.NEIGHBOR_MATRIX_SIZE}")
+        
+        # 图连通性优化
+        if parameter.DELAYED_NODE_REMOVAL:
+            rospy.loginfo(f"[ENABLED] Delayed Node Removal - delay steps: {parameter.NODE_REMOVAL_DELAY_STEPS}")
+        
+        # 前沿点处理优化
+        if parameter.DISTANCE_WEIGHTED_UTILITY:
+            rospy.loginfo(f"[ENABLED] Distance Weighted Utility - decay: {parameter.UTILITY_DISTANCE_DECAY}")
+        
+        # D*-Lite优化
+        if parameter.ENABLE_DSTARLITE:
+            rospy.loginfo(f"[ENABLED] D*-Lite - max time: {parameter.DSTARLITE_MAX_TIME}s")
+            if parameter.DSTARLITE_ADAPTIVE_TIME:
+                rospy.loginfo("[ENABLED] D*-Lite Adaptive Time")
+        
+        # 狭窄通道检测
+        if parameter.ENABLE_NARROW_PASSAGE_DETECTION:
+            rospy.loginfo(f"[ENABLED] Narrow Passage Detection - threshold: {parameter.NARROW_PASSAGE_WIDTH_THRESHOLD}m")
+        
+        # 图连通性检查优化
+        if parameter.USE_CURRENT_LOCATION_FOR_CONNECTIVITY:
+            rospy.loginfo("[ENABLED] Use Current Location for Connectivity Check")
+        
+        # RL策略选择
+        if parameter.GREEDY_ACTION_SELECTION:
+            rospy.loginfo("[ENABLED] Greedy Action Selection - smoother trajectory")
+        else:
+            rospy.loginfo("[DEFAULT] Stochastic Action Selection - more exploratory")
+        
+        rospy.loginfo("=" * 50)
 
     def detect_waypoint_loop(self, max_length=6):
         if len(self.history_waypoint_list) < max_length:
@@ -439,7 +490,7 @@ class Runner:
         communities.pose.orientation.z = 0.0
         communities.pose.orientation.w = 1.0
         
-        # 添加所有社区中心点
+        # 添加所有聚类中心点
         for center_coords in self.robot.node_manager.cluster_center_node_dict.keys():
             point = Point()
             point.x = center_coords[0]

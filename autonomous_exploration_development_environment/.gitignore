@@ -12,7 +12,7 @@ install
 
 src/vehicle_simulator/mesh/*
 
-!src/vehicle_simulator/mesh/matterport
+src/vehicle_simulator/mesh/matterport
 
 src/vehicle_simulator/mesh/matterport/meshes/*
 

@@ -2,9 +2,11 @@
 build/
 devel/
 logs/
+src/DARE/
 *.pyc
 __pycache__/
 .catkin_workspace
+
 
 # IDE
 .vscode/
@@ -19,3 +21,11 @@ dist/
 # OS
 .DS_Store
 Thumbs.db
+
+# Large files
+# */log/
+# */mesh/
+# *.jpg
+# *.png
+# *.dae
+# *.ply

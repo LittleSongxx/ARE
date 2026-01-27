@@ -28,13 +28,14 @@ MIN_UTILITY = 2  # ignore the utility if observable frontiers are less than this
 UPDATING_MAP_SIZE = 4 * SENSOR_RANGE + 4 * NODE_RESOLUTION  # nodes outside this range will not be affected by current measurements
 
 # training parameters
+MAX_EPISODES = 5000  # Total number of episodes to train
 MAX_EPISODE_STEP = 128
 REPLAY_SIZE = 10000
 MINIMUM_BUFFER_SIZE = 2000
 BATCH_SIZE = 128
 LR = 1e-5
 GAMMA = 1
-NUM_META_AGENT = 16  # how many threads does your CPU have
+NUM_META_AGENT = 8  # Reduced from 16 to prevent OOM (each agent uses ~0.6GB)
 
 # network parameters
 NODE_INPUT_DIM = 4

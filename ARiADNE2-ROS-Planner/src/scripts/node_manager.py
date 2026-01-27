@@ -3,8 +3,6 @@ import rospy
 import heapq
 from copy import deepcopy
 
-from torch.fx.proxy import orig_method_name
-
 import parameter
 import math
 import numpy as np
@@ -21,9 +19,6 @@ class NodeManager:
         self.key_node_dict = {}
         # use dictionary to index cluster center node
         self.cluster_center_node_dict = {}
-        # incremental cluster update
-        self.last_robot_location = None
-        self.cluster_update_threshold = parameter.NODE_RESOLUTION * parameter.INCREMENTAL_UPDATE_THRESHOLD_FACTOR  # 机器人移动超过此距离时更新社区
         # quad tree is initialized at
         self.start = start
 
@@ -113,8 +108,13 @@ class NodeManager:
         t3 = time.time()
         # print("update edges", t3 - t2)
 
-        # remove nodes unconnected to the origin
-        self.remove_unconnected_nodes(self.start)
+        # remove nodes unconnected to the origin (or current location if configured)
+        if parameter.USE_CURRENT_LOCATION_FOR_CONNECTIVITY:
+            # 使用当前机器人位置检查连通性，避免远离起点的区域节点被错误删除
+            self.remove_unconnected_nodes(robot_location)
+        else:
+            # 原始行为：使用固定起点检查连通性
+            self.remove_unconnected_nodes(self.start)
         t4 = time.time()
 
         redundant_nodes = self.new_nodes & self.removed_nodes
@@ -165,14 +165,6 @@ class NodeManager:
 
     def get_rarefied_graph(self, robot_location, map_info):
         self.dist_to_nearest_frontier = 1e8
-
-        # 增量式更新：只在机器人移动足够距离时才更新社区
-        need_full_update = True
-        if parameter.ENABLE_INCREMENTAL_COMMUNITY_UPDATE and self.last_robot_location is not None:
-            move_distance = np.linalg.norm(robot_location - self.last_robot_location)
-            if move_distance < self.cluster_update_threshold and len(self.cluster_center_node_dict) > 0:
-                need_full_update = False
-                # rospy.loginfo(f"Incremental update: moved {move_distance:.2f}m")
 
         t1 = time.time()
         # get all nodes with non-zero utility
@@ -266,76 +258,33 @@ class NodeManager:
                             key_node = KeyNode(node.coords, node.utility, node.visited)
                             self.key_node_dict[(key_node_coords[0], key_node_coords[1])] = key_node
 
-        # check existing cluster centers (增量式更新)
-        if need_full_update:
-            # 完全重建社区
-            cluster_center_nodes_to_delete = list(self.cluster_center_node_dict.keys())
-            for center_coords in cluster_center_nodes_to_delete:
-                del self.cluster_center_node_dict[center_coords]
-            rospy.loginfo("Full update: cleared all %d cluster centers", len(cluster_center_nodes_to_delete))
-        else:
-            # 增量式更新：只检查现有社区
-            cluster_center_nodes_to_delete = []
-            unreachable_count = 0
-            for center_node, _ in self.cluster_center_node_dict.values():
-                if center_node.utility == 0 or center_node in nodes_in_cluster:
-                    cluster_center_nodes_to_delete.append(center_node)
-                    continue
-                if self.nodes_dict.find((center_node.coords[0], center_node.coords[1])) is None:
-                    cluster_center_nodes_to_delete.append(center_node)
-                    continue
-                
-                # 【方案1核心】：始终检查社区中心的可达性
-                # 这样可以在地图更新后立即移除墙后的社区
-                if parameter.ENABLE_COMMUNITY_REACHABILITY_CHECK:
-                    _, dist = self.a_star(robot_location, center_node.coords)
-                    if dist >= 1e8:
-                        # 路径不可达，删除此社区（避免墙后社区）
-                        cluster_center_nodes_to_delete.append(center_node)
-                        unreachable_count += 1
-                        continue
-                    
-                self.update_clustered_nodes(center_node, clustered_non_zero_utility_nodes)
+        # check existing cluster centers
+        cluster_center_nodes_to_delete = []
+        for center_node, _ in self.cluster_center_node_dict.values():
+            if center_node.utility == 0 or center_node in nodes_in_cluster:
+                cluster_center_nodes_to_delete.append(center_node)
+                continue
+            if self.nodes_dict.find((center_node.coords[0], center_node.coords[1])) is None:
+                cluster_center_nodes_to_delete.append(center_node)
+                continue
+            self.update_clustered_nodes(center_node, clustered_non_zero_utility_nodes)
 
-            for center_node in cluster_center_nodes_to_delete:
-                del self.cluster_center_node_dict[(center_node.coords[0], center_node.coords[1])]
-            
-            if unreachable_count > 0:
-                rospy.loginfo("Removed %d unreachable cluster centers (behind walls)", unreachable_count)
+        for center_node in cluster_center_nodes_to_delete:
+            del self.cluster_center_node_dict[(center_node.coords[0], center_node.coords[1])]
 
-        # find other cluster centers (只在完全更新或有新节点时)
-        if need_full_update or len(non_zero_utility_nodes - clustered_non_zero_utility_nodes) > 0:
-            new_cluster_count = 0
-            skipped_unreachable = 0
-            
-            for center_node in non_zero_utility_nodes:
-                if center_node in clustered_non_zero_utility_nodes:
-                    continue
+        # find other cluster centers
+        for center_node in non_zero_utility_nodes:
+            if center_node in clustered_non_zero_utility_nodes:
+                continue
 
-                # 【方案1核心】：新社区生成前必须验证可达性
-                # 防止在墙后生成无用的社区中心
-                if parameter.ENABLE_COMMUNITY_REACHABILITY_CHECK:
-                    _, dist = self.a_star(robot_location, center_node.coords)
-                    if dist >= 1e8:
-                        # 路径不可达，跳过此社区中心（墙后或隔离区域）
-                        skipped_unreachable += 1
-                        continue
+            if parameter.ENABLE_DSTARLITE:
+                dstar = DStarLite(self.nodes_dict, (robot_location[0], robot_location[1]), (center_node.coords[0], center_node.coords[1]))
+            else:
+                dstar = None
 
-                if parameter.ENABLE_DSTARLITE:
-                    dstar = DStarLite(self.nodes_dict, (robot_location[0], robot_location[1]), (center_node.coords[0], center_node.coords[1]))
-                else:
-                    dstar = None
+            self.cluster_center_node_dict[(center_node.coords[0], center_node.coords[1])] = [center_node, dstar]
+            self.update_clustered_nodes(center_node, clustered_non_zero_utility_nodes)
 
-                self.cluster_center_node_dict[(center_node.coords[0], center_node.coords[1])] = [center_node, dstar]
-                self.update_clustered_nodes(center_node, clustered_non_zero_utility_nodes)
-                new_cluster_count += 1
-            
-            if new_cluster_count > 0 or skipped_unreachable > 0:
-                rospy.loginfo("Created %d new clusters, skipped %d unreachable ones", new_cluster_count, skipped_unreachable)
-
-        # 更新最后的机器人位置
-        self.last_robot_location = robot_location.copy()
-        
         t2 = time.time()
         # print("find cluster center", t2 - t1)
 
@@ -633,9 +582,6 @@ class Node:
         self.observable_frontiers = self.initialize_observable_frontiers(frontiers, updating_map_info)
         self.visited = 0
 
-        # 计算该节点的自适应分辨率
-        self.node_resolution = calculate_adaptive_resolution(coords, updating_map_info)
-
         # possible neighbors are 5 * 5 surrounding nodes
         self.neighbor_matrix = -np.ones((5, 5))
         self.neighbor_set = set()
@@ -670,105 +616,52 @@ class Node:
         if hard_update:
             self.neighbor_matrix = -np.ones((5, 5))
             self.neighbor_matrix[2, 2] = 1
-        
-        # 使用动态分辨率时，搜索附近实际存在的节点
-        if parameter.ENABLE_DYNAMIC_RESOLUTION:
-            # 搜索半径：使用当前节点分辨率的2.5倍，确保能找到所有可能的邻居
-            # 在空旷区域（大分辨率），允许更远的连接
-            # 跳跃式连接优化：在空旷区域允许更远的搜索和连接
-            # 使用可配置的搜索半径因子
-            search_radius = self.node_resolution * parameter.JUMP_SEARCH_RADIUS_FACTOR
-            search_box = get_quad_tree_box(self.coords, search_radius)
-            nearby_nodes = nodes_dict.within_bb(search_box)
-            
-            for node_wrapper in nearby_nodes:
-                neighbor_node = node_wrapper.data
-                neighbor_coords = neighbor_node.coords
-                
-                # 跳过自己
-                if neighbor_coords[0] == self.coords[0] and neighbor_coords[1] == self.coords[1]:
+
+        for i in range(self.neighbor_matrix.shape[0]):
+            for j in range(self.neighbor_matrix.shape[1]):
+                if self.neighbor_matrix[i, j] != -1:
                     continue
-                
-                # 动态距离范围：使用可配置的距离因子
-                dist = np.linalg.norm(neighbor_coords - self.coords)
-                min_res = min(self.node_resolution, neighbor_node.node_resolution)
-                max_res = max(self.node_resolution, neighbor_node.node_resolution)
-                min_dist = min_res * parameter.JUMP_MIN_DISTANCE_FACTOR
-                max_dist = max_res * parameter.JUMP_MAX_DISTANCE_FACTOR
-                
-                if dist < min_dist or dist > max_dist:
-                    continue
-                
-                # 检查是否在地图范围内
-                if (neighbor_coords[0] <= updating_map_info.map_origin_x
-                    or neighbor_coords[1] <= updating_map_info.map_origin_y
-                    or neighbor_coords[0] >= updating_map_info.map_origin_x + 
-                       updating_map_info.map.shape[1] * updating_map_info.cell_size
-                    or neighbor_coords[1] >= updating_map_info.map_origin_y + 
-                       updating_map_info.map.shape[0] * updating_map_info.cell_size):
-                    continue
-                
-                # 【增强碰撞检测】检查墙体和未知区域
-                collision = check_collision_type(self.coords, neighbor_coords, updating_map_info)
-                
-                if collision == parameter.FREE:
-                    # 自由空间，可以建立连接
-                    self.neighbor_set.add((neighbor_coords[0], neighbor_coords[1]))
-                    neighbor_node.neighbor_set.add((self.coords[0], self.coords[1]))
-                elif collision == parameter.OCCUPIED or collision == parameter.UNKNOWN:
-                    # 遇到障碍物或未知区域，移除已有连接
-                    if (neighbor_coords[0], neighbor_coords[1]) in self.neighbor_set:
-                        self.neighbor_set.remove((neighbor_coords[0], neighbor_coords[1]))
-                    if (self.coords[0], self.coords[1]) in neighbor_node.neighbor_set:
-                        neighbor_node.neighbor_set.remove((self.coords[0], self.coords[1]))
-        else:
-            # 原有的固定步长逻辑
-            for i in range(self.neighbor_matrix.shape[0]):
-                for j in range(self.neighbor_matrix.shape[1]):
-                    if self.neighbor_matrix[i, j] != -1:
+                else:
+                    center_index = self.neighbor_matrix.shape[0] // 2
+                    if i == center_index and j == center_index:
+                        self.neighbor_matrix[i, j] = 1
+                        continue
+
+                    neighbor_coords = np.around(
+                        np.array([self.coords[0] + (i - center_index) * parameter.NODE_RESOLUTION,
+                                  self.coords[1] + (j - center_index) * parameter.NODE_RESOLUTION]), 1)
+                    neighbor_node = nodes_dict.find((neighbor_coords[0], neighbor_coords[1]))
+                    if neighbor_node is None:
+                        continue
+                    elif (neighbor_node.data.coords[0] <= updating_map_info.map_origin_x
+                          or neighbor_node.data.coords[1] <= updating_map_info.map_origin_y
+                          or neighbor_node.data.coords[0] >= updating_map_info.map_origin_x +
+                          updating_map_info.map.shape[1] * updating_map_info.cell_size
+                          or neighbor_node.data.coords[1] >= updating_map_info.map_origin_y +
+                          updating_map_info.map.shape[0] * updating_map_info.cell_size):
                         continue
                     else:
-                        center_index = self.neighbor_matrix.shape[0] // 2
-                        if i == center_index and j == center_index:
+                        neighbor_node = neighbor_node.data
+                        collision = check_collision_type(self.coords, neighbor_coords, updating_map_info)
+                        neighbor_matrix_x = center_index + (center_index - i)
+                        neighbor_matrix_y = center_index + (center_index - j)
+                        if collision == parameter.FREE:
                             self.neighbor_matrix[i, j] = 1
-                            continue
-
-                        # 使用该节点存储的自适应分辨率
-                        neighbor_coords = np.around(
-                            np.array([self.coords[0] + (i - center_index) * self.node_resolution,
-                                      self.coords[1] + (j - center_index) * self.node_resolution]), 1)
-                        neighbor_node = nodes_dict.find((neighbor_coords[0], neighbor_coords[1]))
-                        if neighbor_node is None:
-                            continue
-                        elif (neighbor_node.data.coords[0] <= updating_map_info.map_origin_x
-                              or neighbor_node.data.coords[1] <= updating_map_info.map_origin_y
-                              or neighbor_node.data.coords[0] >= updating_map_info.map_origin_x +
-                              updating_map_info.map.shape[1] * updating_map_info.cell_size
-                              or neighbor_node.data.coords[1] >= updating_map_info.map_origin_y +
-                              updating_map_info.map.shape[0] * updating_map_info.cell_size):
-                            continue
+                            self.neighbor_set.add((neighbor_coords[0], neighbor_coords[1]))
+                            neighbor_node.neighbor_matrix[neighbor_matrix_x, neighbor_matrix_y] = 1
+                            neighbor_node.neighbor_set.add((self.coords[0], self.coords[1]))
+                        elif collision == parameter.OCCUPIED:
+                            self.neighbor_matrix[i, j] = 0
+                            if (neighbor_coords[0], neighbor_coords[1]) in self.neighbor_set:
+                                self.neighbor_set.remove((neighbor_coords[0], neighbor_coords[1]))
+                            neighbor_node.neighbor_matrix[neighbor_matrix_x, neighbor_matrix_y] = 0
+                            if (self.coords[0], self.coords[1]) in neighbor_node.neighbor_set:
+                                neighbor_node.neighbor_set.remove((self.coords[0], self.coords[1]))
                         else:
-                            neighbor_node = neighbor_node.data
-                            collision = check_collision_type(self.coords, neighbor_coords, updating_map_info)
-                            neighbor_matrix_x = center_index + (center_index - i)
-                            neighbor_matrix_y = center_index + (center_index - j)
-                            if collision == parameter.FREE:
-                                self.neighbor_matrix[i, j] = 1
-                                self.neighbor_set.add((neighbor_coords[0], neighbor_coords[1]))
-                                neighbor_node.neighbor_matrix[neighbor_matrix_x, neighbor_matrix_y] = 1
-                                neighbor_node.neighbor_set.add((self.coords[0], self.coords[1]))
-                            elif collision == parameter.OCCUPIED:
-                                self.neighbor_matrix[i, j] = 0
-                                if (neighbor_coords[0], neighbor_coords[1]) in self.neighbor_set:
-                                    self.neighbor_set.remove((neighbor_coords[0], neighbor_coords[1]))
-                                neighbor_node.neighbor_matrix[neighbor_matrix_x, neighbor_matrix_y] = 0
-                                if (self.coords[0], self.coords[1]) in neighbor_node.neighbor_set:
-                                    neighbor_node.neighbor_set.remove((self.coords[0], self.coords[1]))
-                            else:
-                                if (neighbor_coords[0], neighbor_coords[1]) in self.neighbor_set:
-                                    self.neighbor_set.remove((neighbor_coords[0], neighbor_coords[1]))
-                                if (self.coords[0], self.coords[1]) in neighbor_node.neighbor_set:
-                                    neighbor_node.neighbor_set.remove((self.coords[0], self.coords[1]))
+                            # UNKNOWN区域：保持现有连接不变，不主动断开
+                            # 这样可以避免因为暂时的UNKNOWN状态导致图的连通性被破坏
+                            # 只有当明确检测到OCCUPIED时才断开连接
+                            pass
 
         if self.utility == 0:
             self.need_update_neighbor = False
@@ -1040,5 +933,3 @@ class DStarLite:
         if nodes_to_update:
             for node in nodes_to_update:
                 self.update_node(node)
-
-

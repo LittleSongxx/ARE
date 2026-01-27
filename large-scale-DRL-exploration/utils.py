@@ -112,7 +112,7 @@ def get_frontier_in_map(map_info):
     x_len = map_info.map.shape[1]
     y_len = map_info.map.shape[0]
     unknown = (map_info.map == UNKNOWN) * 1
-    unknown = np.lib.pad(unknown, ((1, 1), (1, 1)), 'constant', constant_values=0)
+    unknown = np.pad(unknown, ((1, 1), (1, 1)), 'constant', constant_values=0)
     unknown_neighbor = unknown[2:][:, 1:x_len + 1] + unknown[:y_len][:, 1:x_len + 1] + unknown[1:y_len + 1][:, 2:] \
                        + unknown[1:y_len + 1][:, :x_len] + unknown[:y_len][:, 2:] + unknown[2:][:, :x_len] + \
                        unknown[2:][:, 2:] + unknown[:y_len][:, :x_len]
@@ -184,7 +184,7 @@ def check_collision(start, end, map_info):
     dy *= 2
 
     while 0 <= x < map.shape[1] and 0 <= y < map.shape[0]:
-        k = map.item(int(y), int(x))
+        k = map[int(y), int(x)]
         if x == x1 and y == y1:
             break
         if k == OCCUPIED:

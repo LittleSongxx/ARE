@@ -71,6 +71,20 @@ def get_free_and_connected_map(location, map_info):
     return connected_free_map
 
 
+def get_free_and_connected_map_extended(location, map_info):
+    """
+    扩展版本：将FREE和UNKNOWN都视为可能可通行的区域
+    用于狭窄通道检测场景
+    """
+    # FREE和UNKNOWN都视为潜在可通行
+    passable = ((map_info.map == parameter.FREE) | (map_info.map == parameter.UNKNOWN)).astype(float)
+    labeled_passable = label(passable, connectivity=2)
+    cell = get_cell_position_from_coords(location, map_info)
+    label_number = labeled_passable[cell[1], cell[0]]
+    connected_passable_map = (labeled_passable == label_number)
+    return connected_passable_map
+
+
 def get_updating_node_coords(location, updating_map_info, check_connectivity=True):
     x_min = updating_map_info.map_origin_x
     y_min = updating_map_info.map_origin_y
@@ -179,16 +193,37 @@ def is_free(location, map_info):
         return True
 
 
+def is_passable(location, map_info):
+    """
+    检查位置是否可通行（FREE或UNKNOWN都视为可通行）
+    用于狭窄通道场景
+    """
+    cell = get_cell_position_from_coords(location, map_info)
+    cell_value = map_info.map[cell[1], cell[0]]
+    if cell_value == parameter.FREE or cell_value == parameter.UNKNOWN:
+        return True
+    return False
+
+
 def check_collision(start, end, map_info):
-    # Bresenham line algorithm checking
-    # assert start[0] >= map_info.map_origin_x
-    # assert start[1] >= map_info.map_origin_y
-    # assert end[0] >= map_info.map_origin_x
-    # assert end[1] >= map_info.map_origin_y
-    # assert start[0] <= map_info.map_origin_x + map_info.cell_size * map_info.map.shape[1]
-    # assert start[1] <= map_info.map_origin_y + map_info.cell_size * map_info.map.shape[0]
-    # assert end[0] <= map_info.map_origin_x + map_info.cell_size * map_info.map.shape[1]
-    # assert end[1] <= map_info.map_origin_y + map_info.cell_size * map_info.map.shape[0]
+    """
+    碰撞检测函数 - 支持多种模式
+    根据parameter中的配置选择不同的检测策略
+    """
+    # 根据配置选择检测模式
+    if parameter.SOFT_COLLISION_CHECK:
+        return check_collision_soft(start, end, map_info)
+    elif parameter.ALLOW_UNKNOWN_PASSTHROUGH:
+        return check_collision_with_unknown_tolerance(start, end, map_info)
+    else:
+        return check_collision_original(start, end, map_info)
+
+
+def check_collision_original(start, end, map_info):
+    """
+    原始碰撞检测函数 - Bresenham line algorithm
+    OCCUPIED和UNKNOWN都视为碰撞
+    """
     collision = False
 
     start_cell = get_cell_position_from_coords(start, map_info)
@@ -228,8 +263,101 @@ def check_collision(start, end, map_info):
     return collision
 
 
+def check_collision_soft(start, end, map_info):
+    """
+    软碰撞检测 - 只有OCCUPIED才算碰撞
+    UNKNOWN区域可以通过
+    """
+    collision = False
+
+    start_cell = get_cell_position_from_coords(start, map_info)
+    end_cell = get_cell_position_from_coords(end, map_info)
+    map = map_info.map
+
+    x0 = start_cell[0]
+    y0 = start_cell[1]
+    x1 = end_cell[0]
+    y1 = end_cell[1]
+
+    dx, dy = abs(x1 - x0), abs(y1 - y0)
+    x, y = x0, y0
+    error = dx - dy
+    x_inc = 1 if x1 > x0 else -1
+    y_inc = 1 if y1 > y0 else -1
+    dx *= 2
+    dy *= 2
+
+    while 0 <= x < map.shape[1] and 0 <= y < map.shape[0]:
+        k = map.item(int(y), int(x))
+        if x == x1 and y == y1:
+            break
+        if k == parameter.OCCUPIED:
+            collision = True
+            break
+        # UNKNOWN不再视为碰撞
+        if error > 0:
+            x += x_inc
+            error -= dy
+        else:
+            y += y_inc
+            error += dx
+
+    return collision
+
+
+def check_collision_with_unknown_tolerance(start, end, map_info):
+    """
+    带未知区域容忍度的碰撞检测
+    允许穿过一定数量的连续UNKNOWN格子
+    """
+    collision = False
+    unknown_count = 0
+    max_unknown = parameter.UNKNOWN_TOLERANCE_CELLS
+
+    start_cell = get_cell_position_from_coords(start, map_info)
+    end_cell = get_cell_position_from_coords(end, map_info)
+    map = map_info.map
+
+    x0 = start_cell[0]
+    y0 = start_cell[1]
+    x1 = end_cell[0]
+    y1 = end_cell[1]
+
+    dx, dy = abs(x1 - x0), abs(y1 - y0)
+    x, y = x0, y0
+    error = dx - dy
+    x_inc = 1 if x1 > x0 else -1
+    y_inc = 1 if y1 > y0 else -1
+    dx *= 2
+    dy *= 2
+
+    while 0 <= x < map.shape[1] and 0 <= y < map.shape[0]:
+        k = map.item(int(y), int(x))
+        if x == x1 and y == y1:
+            break
+        if k == parameter.OCCUPIED:
+            collision = True
+            break
+        if k == parameter.UNKNOWN:
+            unknown_count += 1
+            if unknown_count > max_unknown:
+                collision = True
+                break
+        else:
+            # 遇到FREE，重置计数
+            unknown_count = 0
+        if error > 0:
+            x += x_inc
+            error -= dy
+        else:
+            y += y_inc
+            error += dx
+
+    return collision
+
+
 def check_collision_type(start, end, map_info):
-    # Bresenham line algorithm checking with enhanced wall detection
+    # Bresenham line algorithm checking
     start_cell = get_cell_position_from_coords(start, map_info)
     end_cell = get_cell_position_from_coords(end, map_info)
     map = map_info.map.astype(np.int32)
@@ -247,111 +375,145 @@ def check_collision_type(start, end, map_info):
     dx *= 2
     dy *= 2
 
-    # 【增强墙体检测】使用可配置的检查半径
-    check_radius = parameter.COLLISION_CHECK_RADIUS
-    
     while 0 <= x < map.shape[1] and 0 <= y < map.shape[0]:
-        # 检查当前点及其邻域
-        for dx_check in range(-check_radius, check_radius + 1):
-            for dy_check in range(-check_radius, check_radius + 1):
-                check_x = int(x) + dx_check
-                check_y = int(y) + dy_check
-                
-                if 0 <= check_x < map.shape[1] and 0 <= check_y < map.shape[0]:
-                    k = map.item(check_y, check_x)
-                    if k == parameter.OCCUPIED:
-                        return parameter.OCCUPIED
-                    # 未知区域也视为碰撞（保守策略）
-                    if k == parameter.UNKNOWN:
-                        return parameter.UNKNOWN
-        
+        k = map.item(int(y), int(x))
         if x == x1 and y == y1:
             break
-            
+        if k == parameter.OCCUPIED:
+            return parameter.OCCUPIED
+        if k == parameter.UNKNOWN:
+            # 根据配置决定是否将UNKNOWN视为碰撞
+            if not parameter.SOFT_COLLISION_CHECK:
+                return parameter.UNKNOWN
+            # 当SOFT_COLLISION_CHECK=True时，UNKNOWN不视为碰撞，继续检测
         if error > 0:
             x += x_inc
             error -= dy
         else:
             y += y_inc
             error += dx
-    
+
     return parameter.FREE
 
 
-def get_local_openness(coords, map_info, sample_radius=5.0, num_rays=8):
+def check_collision_type_soft(start, end, map_info):
     """
-    计算给定位置的局部空旷程度
-    Args:
-        coords: 位置坐标 (x, y)
-        map_info: 地图信息
-        sample_radius: 采样半径（米）
-        num_rays: 射线数量
-    Returns:
-        average_free_distance: 平均自由距离（米），越大表示越空旷
+    软碰撞类型检测 - 只返回OCCUPIED或FREE
     """
-    # 如果地图信息为空，返回默认值
-    if map_info is None:
-        return sample_radius
+    start_cell = get_cell_position_from_coords(start, map_info)
+    end_cell = get_cell_position_from_coords(end, map_info)
+    map = map_info.map.astype(np.int32)
+
+    x0 = start_cell[0]
+    y0 = start_cell[1]
+    x1 = end_cell[0]
+    y1 = end_cell[1]
+
+    dx, dy = abs(x1 - x0), abs(y1 - y0)
+    x, y = x0, y0
+    error = dx - dy
+    x_inc = 1 if x1 > x0 else -1
+    y_inc = 1 if y1 > y0 else -1
+    dx *= 2
+    dy *= 2
+
+    while 0 <= x < map.shape[1] and 0 <= y < map.shape[0]:
+        k = map.item(int(y), int(x))
+        if x == x1 and y == y1:
+            break
+        if k == parameter.OCCUPIED:
+            return parameter.OCCUPIED
+        # UNKNOWN不再视为碰撞
+        if error > 0:
+            x += x_inc
+            error -= dy
+        else:
+            y += y_inc
+            error += dx
+
+    return parameter.FREE
+
+
+def detect_narrow_passage(location, map_info, search_radius=None):
+    """
+    检测当前位置附近是否存在狭窄通道
+    返回: (is_narrow, passage_direction) 
+    """
+    if not parameter.ENABLE_NARROW_PASSAGE_DETECTION:
+        return False, None
     
-    angles = np.linspace(0, 2 * np.pi, num_rays, endpoint=False)
-    free_distances = []
+    if search_radius is None:
+        search_radius = parameter.SENSOR_RANGE / 2
     
-    for angle in angles:
-        # 沿着每个方向投射射线
-        max_steps = int(sample_radius / map_info.cell_size)
-        for step in range(1, max_steps + 1):
-            distance = step * map_info.cell_size
-            test_x = coords[0] + distance * np.cos(angle)
-            test_y = coords[1] + distance * np.sin(angle)
-            test_coords = np.array([test_x, test_y])
+    cell = get_cell_position_from_coords(location, map_info)
+    cell_radius = int(search_radius / map_info.cell_size)
+    
+    # 检查8个方向
+    directions = [
+        (1, 0), (-1, 0), (0, 1), (0, -1),
+        (1, 1), (-1, -1), (1, -1), (-1, 1)
+    ]
+    
+    narrow_directions = []
+    threshold_cells = int(parameter.NARROW_PASSAGE_WIDTH_THRESHOLD / map_info.cell_size)
+    
+    for dx, dy in directions:
+        # 沿方向检测通道宽度
+        width = 0
+        for dist in range(1, cell_radius):
+            check_x = cell[0] + dx * dist
+            check_y = cell[1] + dy * dist
             
-            # 检查是否在地图范围内
-            cell_pos = get_cell_position_from_coords(test_coords, map_info, check_negative=False)
-            if (cell_pos[0] < 0 or cell_pos[0] >= map_info.map.shape[1] or
-                cell_pos[1] < 0 or cell_pos[1] >= map_info.map.shape[0]):
-                free_distances.append(distance)
-                break
-            
-            # 检查是否碰到障碍物
-            if map_info.map[int(cell_pos[1]), int(cell_pos[0])] == parameter.OCCUPIED:
-                free_distances.append(distance)
+            if 0 <= check_x < map_info.map.shape[1] and 0 <= check_y < map_info.map.shape[0]:
+                if map_info.map[check_y, check_x] == parameter.FREE:
+                    # 检测垂直于行进方向的宽度
+                    perp_width = measure_perpendicular_width(
+                        (check_x, check_y), (dx, dy), map_info
+                    )
+                    if perp_width < threshold_cells:
+                        narrow_directions.append((dx, dy))
+                        break
+    
+    if narrow_directions:
+        return True, narrow_directions
+    return False, None
+
+
+def measure_perpendicular_width(cell, direction, map_info):
+    """
+    测量垂直于给定方向的通道宽度
+    """
+    dx, dy = direction
+    # 垂直方向
+    perp_dx, perp_dy = -dy, dx
+    
+    width = 1  # 当前格子
+    
+    # 正向检测
+    for i in range(1, 20):
+        check_x = cell[0] + perp_dx * i
+        check_y = cell[1] + perp_dy * i
+        if 0 <= check_x < map_info.map.shape[1] and 0 <= check_y < map_info.map.shape[0]:
+            if map_info.map[check_y, check_x] == parameter.FREE:
+                width += 1
+            else:
                 break
         else:
-            # 没有碰到障碍物，使用最大距离
-            free_distances.append(sample_radius)
+            break
     
-    return np.mean(free_distances) if free_distances else sample_radius
-
-
-def calculate_adaptive_resolution(coords, map_info):
-    """
-    根据局部环境动态计算节点分辨率
-    Args:
-        coords: 节点坐标
-        map_info: 地图信息
-    Returns:
-        resolution: 自适应的节点分辨率
-    """
-    # 如果未启用动态分辨率或地图信息为空，返回默认值
-    if not parameter.ENABLE_DYNAMIC_RESOLUTION or map_info is None:
-        return parameter.NODE_RESOLUTION
+    # 反向检测
+    for i in range(1, 20):
+        check_x = cell[0] - perp_dx * i
+        check_y = cell[1] - perp_dy * i
+        if 0 <= check_x < map_info.map.shape[1] and 0 <= check_y < map_info.map.shape[0]:
+            if map_info.map[check_y, check_x] == parameter.FREE:
+                width += 1
+            else:
+                break
+        else:
+            break
     
-    # 计算局部空旷程度
-    openness = get_local_openness(coords, map_info)
-    
-    # 根据空旷程度线性插值分辨率
-    # 狭窄区域（openness < NARROW_THRESHOLD）-> MIN_NODE_RESOLUTION
-    # 空旷区域（openness > 2*NARROW_THRESHOLD）-> MAX_NODE_RESOLUTION
-    if openness < parameter.NARROW_THRESHOLD:
-        resolution = parameter.MIN_NODE_RESOLUTION
-    elif openness > 2 * parameter.NARROW_THRESHOLD:
-        resolution = parameter.MAX_NODE_RESOLUTION
-    else:
-        # 线性插值
-        ratio = (openness - parameter.NARROW_THRESHOLD) / parameter.NARROW_THRESHOLD
-        resolution = parameter.MIN_NODE_RESOLUTION + ratio * (parameter.MAX_NODE_RESOLUTION - parameter.MIN_NODE_RESOLUTION)
-    
-    return resolution
+    return width
 
 
 class MapInfo:

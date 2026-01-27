@@ -1,13 +1,62 @@
 <launch>
   <arg name="base_frame" default="sensor"/>
   <arg name="sensor_range" default="20.0"/>
-  <arg name="map_resolution" default="0.4"/>
+  <arg name="map_resolution" default="0.4"/> <!-- 值越小，地图越精细但计算量越大 -->
 
   <!-- 默认的节点密度 -->
-  <arg name="node_resolution" default="2.0"/>
+  <arg name="node_resolution" default="2"/>
 
   <arg name="enable_terrain" default="true"/>
   <arg name="only_ground_free" default="false"/>
+
+  <!-- ============== 性能优化参数 ============== -->
+  <!-- 碰撞检测优化 -->
+  <arg name="soft_collision_check" default="false"/>  <!-- 软碰撞检测：只有OCCUPIED才算碰撞 -->
+  <arg name="allow_unknown_passthrough" default="false"/>  <!-- 允许穿过未知区域 -->
+  <arg name="unknown_tolerance_cells" default="2"/>  <!-- 允许穿过的最大连续未知格子数 -->
+
+  <!-- 邻居节点发现优化 -->
+  <arg name="extended_neighbor_range" default="false"/>  <!-- 扩展邻居搜索范围 -->
+  <arg name="neighbor_matrix_size" default="5"/>  <!-- 邻居矩阵大小(5或7) -->
+
+  <!-- 图连通性优化 -->
+  <arg name="delayed_node_removal" default="false"/>  <!-- 延迟删除断开的节点 -->
+  <arg name="node_removal_delay_steps" default="3"/>  <!-- 延迟删除步数 -->
+
+  <!-- 前沿点处理优化 -->
+  <arg name="distance_weighted_utility" default="false"/>  <!-- 距离加权效用 -->
+  <arg name="utility_distance_decay" default="0.1"/>  <!-- 距离衰减系数 -->
+
+  <!-- D*-Lite优化 -->
+  <arg name="enable_dstarlite" default="false"/>  <!-- 启用D*-Lite -->
+  <arg name="dstarlite_max_time" default="0.1"/>  <!-- D*-Lite最大搜索时间 -->
+  <arg name="dstarlite_adaptive_time" default="false"/>  <!-- 自适应搜索时间 -->
+
+  <!-- 狭窄通道检测 -->
+  <arg name="enable_narrow_passage_detection" default="false"/>  <!-- 启用狭窄通道检测 -->
+  <arg name="narrow_passage_width_threshold" default="3.0"/>  <!-- 狭窄通道宽度阈值(米) -->
+
+  <!-- 图连通性检查优化 -->
+  <arg name="use_current_location_for_connectivity" default="true"/>  <!-- 使用当前位置而非起点检查连通性 -->
+
+  <!-- RL策略选择 -->
+  <arg name="greedy_action_selection" default="false"/>  <!-- 贪婪策略选择：true=更平滑轨迹，false=更具探索性 -->
+
+  <!-- 效用检测范围（sensor_range的倍率） -->
+  <param name="utility_range_factor" value="0.5"/>
+  <param name="min_utility" type="int" value="3"/>
+
+  <!-- 前沿点降采样因子 -->
+  <param name="frontier_downsample_factor" value="1"/>
+
+  <!-- 聚类范围（增大此值可减少聚类中心数量，使其更稀疏） -->
+  <param name="frontier_cluster_range" value="15.0"/>
+
+  <param name="map_resolution" value="$(arg map_resolution)"/> <!-- 占用栅格地图中每个格子代表的实际物理尺寸 -->
+  <param name="global_path_strategy" value="tsp"/> 
+  <param name="hard_update_threshold" value="5.0"/> <!-- 在机器人周围这个范围内的节点和边会被_完全重新计算 -->
+  <param name="replanning_frequency" value="1"/> <!-- 重规划频率（Hz） -->
+  <param name="waypoint_threshold" value="4"/> <!-- 到达当前目标点的距机器人与当前waypoint的距离小于此值时，认为已到达该waypoint离阈值（米） -->
 
   <node pkg="octomap_server" type="octomap_server_node" name="octomap" output="log" unless="$(arg enable_terrain)">
     <remap from="cloud_in" to="sensor_scan"/>
@@ -36,49 +85,41 @@
     <param name="publish_graph" type="bool" value="true"/>
     <param name="node_resolution" value="$(arg node_resolution)"/>
 
-    <!-- 动态分辨率 -->
-    <param name="enable_dynamic_resolution" type="bool" value="false"/>
-    <param name="min_node_resolution" value="1.2"/>
-    <param name="max_node_resolution" value="2.5"/>
-    <param name="narrow_threshold" value="3.5"/>
-
-    <!-- 跳跃连接控制（仅动态分辨率时生效） -->
-    <param name="jump_search_radius_factor" value="3.0"/>
-    <param name="jump_min_distance_factor" value="0.7"/>
-    <param name="jump_max_distance_factor" value="2.2"/>
-
-    <!-- 方向性偏置控制（余弦相似度） -->
-    <param name="use_directional_bias" type="bool" value="false"/>
-    <param name="directional_bias_alpha" value="0.3"/>
-
-    <!-- 增量社区更新控制 -->
-    <param name="enable_incremental_community_update" type="bool" value="false"/>
-    <param name="incremental_update_threshold_factor" value="2.0"/>
-
-    <!-- 社区可达性检查控制（一定程度避免在墙后面生成社区） -->
-    <param name="enable_community_reachability_check" type="bool" value="false"/>
-
-    <!-- 增强碰撞检测开关（false: 单格检测；true: 3×3邻域检测） -->
-    <param name="enable_enhanced_collision_check" type="bool" value="false"/>
-
     <!-- Basic Parameters -->
     <param name="sensor_range" value="$(arg sensor_range)"/>
 
-    <!-- 效用检测范围（sensor_range的倍率） -->
-    <param name="utility_range_factor" value="0.5"/>
-    <param name="min_utility" type="int" value="3"/>
+    <!-- ============== 性能优化参数 ============== -->
+    <!-- 碰撞检测优化 -->
+    <param name="soft_collision_check" type="bool" value="$(arg soft_collision_check)"/>
+    <param name="allow_unknown_passthrough" type="bool" value="$(arg allow_unknown_passthrough)"/>
+    <param name="unknown_tolerance_cells" type="int" value="$(arg unknown_tolerance_cells)"/>
 
-    <!-- 前沿点降采样因子 -->
-    <param name="frontier_downsample_factor" value="3"/>
+    <!-- 邻居节点发现优化 -->
+    <param name="extended_neighbor_range" type="bool" value="$(arg extended_neighbor_range)"/>
+    <param name="neighbor_matrix_size" type="int" value="$(arg neighbor_matrix_size)"/>
 
-    <!-- 社区聚类范围 -->
-    <param name="frontier_cluster_range" value="20.0"/>
+    <!-- 图连通性优化 -->
+    <param name="delayed_node_removal" type="bool" value="$(arg delayed_node_removal)"/>
+    <param name="node_removal_delay_steps" type="int" value="$(arg node_removal_delay_steps)"/>
 
-    <param name="map_resolution" value="$(arg map_resolution)"/>
-    <param name="global_path_strategy" value="tsp"/>
-    <param name="hard_update_threshold" value="5.0"/>
-    <param name="replanning_frequency" value="1"/>
-    <param name="waypoint_threshold" value="4"/>
+    <!-- 前沿点处理优化 -->
+    <param name="distance_weighted_utility" type="bool" value="$(arg distance_weighted_utility)"/>
+    <param name="utility_distance_decay" type="double" value="$(arg utility_distance_decay)"/>
+
+    <!-- D*-Lite优化 -->
+    <param name="enable_dstarlite" type="bool" value="$(arg enable_dstarlite)"/>
+    <param name="dstarlite_max_time" type="double" value="$(arg dstarlite_max_time)"/>
+    <param name="dstarlite_adaptive_time" type="bool" value="$(arg dstarlite_adaptive_time)"/>
+
+    <!-- 狭窄通道检测 -->
+    <param name="enable_narrow_passage_detection" type="bool" value="$(arg enable_narrow_passage_detection)"/>
+    <param name="narrow_passage_width_threshold" type="double" value="$(arg narrow_passage_width_threshold)"/>
+
+    <!-- 图连通性检查优化 -->
+    <param name="use_current_location_for_connectivity" type="bool" value="$(arg use_current_location_for_connectivity)"/>
+
+    <!-- RL策略选择 -->
+    <param name="greedy_action_selection" type="bool" value="$(arg greedy_action_selection)"/>
   </node>
 
   <node pkg="tf" type="static_transform_publisher" name="link_broadcaster" args="0 0 0 0 0 0 1 vehicle base_link 100" />

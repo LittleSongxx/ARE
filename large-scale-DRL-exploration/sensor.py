@@ -18,7 +18,7 @@ def collision_check(x0, y0, x1, y1, ground_truth, robot_belief):
     max_collision = 10
 
     while 0 <= x < ground_truth.shape[1] and 0 <= y < ground_truth.shape[0]:
-        k = ground_truth.item(y, x)
+        k = ground_truth[int(y), int(x)]
         if k == 1 and collision_flag < max_collision:
             collision_flag += 1
             if collision_flag >= max_collision:
@@ -30,7 +30,7 @@ def collision_check(x0, y0, x1, y1, ground_truth, robot_belief):
         if x == x1 and y == y1:
             break
 
-        robot_belief.itemset((y, x), k)
+        robot_belief[int(y), int(x)] = k
 
         if error > 0:
             x += x_inc

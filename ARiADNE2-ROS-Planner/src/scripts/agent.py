@@ -45,9 +45,6 @@ class Agent:
         # rarefied graph
         self.key_node_coords, self.key_utility, self.key_guidepost = None, None, None
         self.key_current_index, self.key_adjacent_matrix, self.key_neighbor_indices = None, None, None
-        
-        # directional bias tracking
-        self.last_direction = None
 
     def update_map(self, map_info):
         self.map_info = map_info
@@ -239,64 +236,34 @@ class Agent:
         edge_padding_mask[0, 0, curren_in_edge] = 1
         return node_inputs, None, edge_mask, next_node_index, next_edge, edge_padding_mask
 
-    def select_next_waypoint(self, observation, greedy=True, use_directional_bias=True, alpha=0.3):
+    def select_next_waypoint(self, observation, greedy=None):
+        """
+        选择下一个waypoint
+        
+        Args:
+            observation: 观测数据
+            greedy: 是否使用贪婪策略。如果为None，则使用parameter.GREEDY_ACTION_SELECTION的值
+        
+        Returns:
+            next_position: 下一个位置坐标
+            next_node_index: 下一个节点索引
+        """
         node_inputs, _, _, current_index, current_edge, _ = observation
         with torch.no_grad():
             logp = self.policy_net(*observation)
 
-        # Apply directional bias based on cosine similarity
-        if use_directional_bias and hasattr(self, 'last_direction') and self.last_direction is not None:
-            # Get candidate positions
-            if torch.is_tensor(current_edge):
-                candidate_indices = current_edge[0, :, 0].detach().cpu().numpy()
-            else:
-                candidate_indices = np.array(current_edge[0, :, 0])
-            
-            # Get current location from key_node_coords
-            if torch.is_tensor(current_index):
-                cur_idx = current_index.item()
-            else:
-                cur_idx = current_index[0][0][0] if isinstance(current_index, np.ndarray) else current_index
-            current_location = self.key_node_coords[cur_idx]
-            
-            candidate_positions = self.key_node_coords[candidate_indices]
-            
-            # Calculate directions to each candidate
-            directions = candidate_positions - current_location
-            norms = np.linalg.norm(directions, axis=1, keepdims=True)
-            norms[norms == 0] = 1.0  # Avoid division by zero
-            directions_normalized = directions / norms
-            
-            # Calculate cosine similarity with last direction
-            last_dir_norm = self.last_direction / (np.linalg.norm(self.last_direction) + 1e-8)
-            cosine_similarities = np.dot(directions_normalized, last_dir_norm)
-            
-            # Convert to torch tensor and apply bias
-            cosine_tensor = torch.FloatTensor(cosine_similarities).unsqueeze(0).to(logp.device)
-            # Scale cosine from [-1, 1] to [0, 1] for positive bias
-            directional_bias = (cosine_tensor + 1) / 2
-            
-            # Blend policy logits with directional bias
-            # alpha controls the influence (0=no influence, 1=only direction)
-            logp_biased = (1 - alpha) * logp + alpha * torch.log(directional_bias + 1e-8)
-            logp = logp_biased
+        # 确定是否使用贪婪策略
+        use_greedy = greedy if greedy is not None else parameter.GREEDY_ACTION_SELECTION
 
-        if greedy:
+        if use_greedy:
+            # 贪婪策略：选择概率最高的动作，轨迹更平滑但可能陷入局部最优
             action_index = torch.argmax(logp, dim=1).long()
         else:
+            # 随机采样：根据概率分布采样，更具探索性但轨迹可能曲折
             action_index = torch.multinomial(logp.exp(), 1).long().squeeze(1)
+        
         next_node_index = current_edge[0, action_index.item(), 0].item()
         next_position = self.key_node_coords[next_node_index]
-        
-        # Update last direction for next iteration
-        if use_directional_bias:
-            # Get current location properly
-            if torch.is_tensor(current_index):
-                cur_idx = current_index.item()
-            else:
-                cur_idx = current_index[0][0][0] if isinstance(current_index, np.ndarray) else current_index
-            current_location = self.key_node_coords[cur_idx]
-            self.last_direction = next_position - current_location
         
         # print("available next positions:", self.key_node_coords[current_edge[0].numpy()].reshape(-1, 2))
 

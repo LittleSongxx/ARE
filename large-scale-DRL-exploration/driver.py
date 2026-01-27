@@ -113,7 +113,7 @@ def main():
 
     # collect data from worker and do training
     try:
-        while True:
+        while curr_episode < MAX_EPISODES:
             # wait for any job to be completed
             done_id, job_list = ray.wait(job_list)
             # get the results
@@ -132,6 +132,9 @@ def main():
 
             # launch new task
             curr_episode += 1
+            if curr_episode >= MAX_EPISODES:
+                print(f"\nReached maximum episodes ({MAX_EPISODES}). Training complete!")
+                break
             job_list.append(meta_agents[info['id']].job.remote(weights_set, curr_episode))
 
             # start training
@@ -307,8 +310,41 @@ def main():
                 torch.save(checkpoint, path_checkpoint)
                 print('Saved model', end='\n')
 
+        # Training completed normally, save final model
+        print('\\nTraining completed! Saving final model...')
+        checkpoint = {"policy_model": global_policy_net.state_dict(),
+                      "q_net1_model": global_q_net1.state_dict(),
+                      "q_net2_model": global_q_net2.state_dict(),
+                      "log_alpha": log_alpha,
+                      "policy_optimizer": global_policy_optimizer.state_dict(),
+                      "q_net1_optimizer": global_q_net1_optimizer.state_dict(),
+                      "q_net2_optimizer": global_q_net2_optimizer.state_dict(),
+                      "log_alpha_optimizer": log_alpha_optimizer.state_dict(),
+                      "episode": curr_episode,
+                      }
+        path_checkpoint = "./" + model_path + "/checkpoint_final.pth"
+        torch.save(checkpoint, path_checkpoint)
+        print(f'Final model saved to {path_checkpoint}')
+        
+        # Clean up
+        for a in meta_agents:
+            ray.kill(a)
+
     except KeyboardInterrupt:
-        print("CTRL_C pressed. Killing remote workers")
+        print("\\nCTRL_C pressed. Saving model and killing remote workers...")
+        checkpoint = {"policy_model": global_policy_net.state_dict(),
+                      "q_net1_model": global_q_net1.state_dict(),
+                      "q_net2_model": global_q_net2.state_dict(),
+                      "log_alpha": log_alpha,
+                      "policy_optimizer": global_policy_optimizer.state_dict(),
+                      "q_net1_optimizer": global_q_net1_optimizer.state_dict(),
+                      "q_net2_optimizer": global_q_net2_optimizer.state_dict(),
+                      "log_alpha_optimizer": log_alpha_optimizer.state_dict(),
+                      "episode": curr_episode,
+                      }
+        path_checkpoint = "./" + model_path + "/checkpoint_interrupted.pth"
+        torch.save(checkpoint, path_checkpoint)
+        print(f'Model saved to {path_checkpoint}')
         for a in meta_agents:
             ray.kill(a)
 

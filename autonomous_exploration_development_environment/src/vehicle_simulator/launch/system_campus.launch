@@ -3,9 +3,16 @@
   <arg name="world_name" default="campus"/>
   <arg name="vehicleHeight" default="0.75"/>
   <arg name="cameraOffsetZ" default="0"/>
+  <!-- 实际控制上下，负值为下 -->
+  <!-- <arg name="vehicleX" default="-50"/>  -->
+  <!-- 实际控制左右，正值为左 -->
+  <!-- <arg name="vehicleY" default="77"/>  -->
+  <!-- <arg name="terrainZ" default="-10"/> -->
+
   <arg name="vehicleX" default="0"/>
   <arg name="vehicleY" default="0"/>
   <arg name="terrainZ" default="0"/>
+
   <arg name="vehicleYaw" default="0"/>
   <arg name="gazebo_gui" default="false"/>
   <arg name="checkTerrainConn" default="false"/>
