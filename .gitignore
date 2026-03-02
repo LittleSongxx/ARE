@@ -2,6 +2,7 @@
 build/
 devel/
 logs/
+offline_bundle/
 src/DARE/
 src/HDPlanner_Exp_and_Nav/
 src/ariadne2_opt
@@ -37,13 +38,3 @@ src/**/maps/
 src/**/gifs/
 src/**/gifts/
 src/**/eval/
-
-# Image files under src packages
-src/**/*.png
-src/**/*.jpg
-src/**/*.jpeg
-src/**/*.gif
-src/**/*.bmp
-src/**/*.tif
-src/**/*.tiff
-src/**/*.webp
