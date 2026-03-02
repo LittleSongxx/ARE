@@ -136,7 +136,12 @@ def evaluate_policy(
         episode_id = start_episode + episode_offset
         artifact_stem = build_artifact_stem(episode_id, prefix="eval_episode")
         output_dir = ensure_bucket_dir(eval_gifs_path, episode_id, result_bucket_episodes)
-        env = Env(episode_id, plot=False)
+        env = Env(
+            episode_id,
+            plot=False,
+            runtime_config=output_config,
+            curriculum_override=output_config.rl_options.use_curriculum_in_eval,
+        )
         agent = InferenceAgent(policy_net, device=eval_device, plot=False)
         trajectory = [env.robot_location.copy()]
         frame_files = []
@@ -159,7 +164,7 @@ def evaluate_policy(
             steps_taken = step
             if agent.utility.sum() == 0:
                 success = True
-                reward += 20
+                reward = env.apply_terminal_bonus(reward)
             episode_return += float(reward)
             save_eval_frame(output_dir, artifact_stem, env, agent, episode_id, step, trajectory, frame_files)
             if success:

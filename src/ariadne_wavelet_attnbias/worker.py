@@ -1,14 +1,19 @@
+from __future__ import annotations
+
 import numpy as np
 import torch
 
 from .agent import Agent
 from .env import Env
 from .ground_truth_node_manager import GroundTruthNodeManager
-from .parameter import EMBEDDING_DIM, NODE_INPUT_DIM, RuntimeConfig, get_gifs_path
+from .parameter import EMBEDDING_DIM, GAMMA, NODE_INPUT_DIM, RuntimeConfig, get_gifs_path
 from .utils import build_artifact_stem, ensure_bucket_dir, finalize_episode_artifacts
 
 
 class Worker:
+    NEXT_OBSERVATION_SLOTS = (9, 10, 11, 12, 13, 14)
+    CRITIC_NEXT_OBSERVATION_SLOTS = (21, 22, 23, 24, 25, 26)
+
     def __init__(
         self,
         meta_agent_id,
@@ -31,12 +36,19 @@ class Worker:
         )
         self.episode_return = 0.0
         self.episode_steps = 0
+        self.reward_component_sums = {
+            "reward_info": 0.0,
+            "reward_dist": 0.0,
+            "reward_safe": 0.0,
+            "reward_terminal": 0.0,
+        }
 
         self.env = Env(
             global_step,
             plot=self.save_image,
             output_dir=self.output_dir,
             artifact_stem=self.episode_artifact_stem,
+            runtime_config=self.runtime_config,
         )
         self.robot = Agent(policy_net, self.device, self.save_image)
         self.ground_truth_node_manager = GroundTruthNodeManager(
@@ -53,6 +65,52 @@ class Worker:
     def _buffer_tensor(tensor: torch.Tensor) -> torch.Tensor:
         # Keep replay data on CPU before it goes through Ray object transport.
         return tensor.detach().to("cpu")
+
+    @staticmethod
+    def apply_n_step_returns(
+        episode_buffer: list[list[torch.Tensor]],
+        n_step: int,
+        gamma: float,
+    ) -> list[list[torch.Tensor]]:
+        if n_step <= 1 or not episode_buffer or not episode_buffer[7]:
+            return episode_buffer
+
+        processed_buffer = [list(slot) for slot in episode_buffer]
+        reward_buffer = episode_buffer[7]
+        done_buffer = episode_buffer[8]
+        buffer_size = len(reward_buffer)
+
+        for index in range(buffer_size):
+            reward_n = 0.0
+            done_n = 0
+            final_index = index
+            available_steps = min(n_step, buffer_size - index)
+
+            for offset in range(available_steps):
+                reward_index = index + offset
+                reward_n += (gamma ** offset) * float(reward_buffer[reward_index].item())
+                final_index = reward_index
+                if int(done_buffer[reward_index].item()) == 1:
+                    done_n = 1
+                    break
+            else:
+                if available_steps < n_step:
+                    done_n = 1
+
+            processed_buffer[7][index] = reward_buffer[index].clone().fill_(reward_n)
+            processed_buffer[8][index] = done_buffer[index].clone().fill_(done_n)
+            for slot_index in Worker.NEXT_OBSERVATION_SLOTS + Worker.CRITIC_NEXT_OBSERVATION_SLOTS:
+                processed_buffer[slot_index][index] = episode_buffer[slot_index][final_index]
+
+        return processed_buffer
+
+    def _accumulate_reward_components(self) -> None:
+        if not self.runtime_config.rl_options.use_reward_decomposition:
+            return
+        self.reward_component_sums["reward_info"] += float(self.env.last_reward_components.get("r_info", 0.0))
+        self.reward_component_sums["reward_dist"] += float(self.env.last_reward_components.get("r_dist", 0.0))
+        self.reward_component_sums["reward_safe"] += float(self.env.last_reward_components.get("r_safe", 0.0))
+        self.reward_component_sums["reward_terminal"] += float(self.env.last_reward_components.get("r_terminal", 0.0))
 
     def run_episode(self):
         done = False
@@ -80,7 +138,8 @@ class Worker:
             self.robot.update_planning_state(self.env.belief_info, self.env.robot_location)
             if self.robot.utility.sum() == 0:
                 done = True
-                reward += 20
+                reward = self.env.apply_terminal_bonus(reward)
+            self._accumulate_reward_components()
             self.episode_return += float(reward)
             self.episode_steps = i + 1
             self.save_reward_done(reward, done)
@@ -99,11 +158,22 @@ class Worker:
             if done:
                 break
 
+        if self.runtime_config.rl_options.use_n_step_return:
+            self.episode_buffer = self.apply_n_step_returns(
+                self.episode_buffer,
+                self.runtime_config.rl_options.n_step,
+                GAMMA,
+            )
+
         self.perf_metrics["travel_dist"] = self.env.travel_dist
         self.perf_metrics["explored_rate"] = self.env.explored_rate
         self.perf_metrics["success_rate"] = done
         self.perf_metrics["episode_return"] = self.episode_return
         self.perf_metrics["episode_steps"] = self.episode_steps
+        if self.runtime_config.rl_options.use_reward_decomposition:
+            self.perf_metrics.update(self.reward_component_sums)
+        if self.runtime_config.rl_options.use_curriculum and self.env.curriculum_level_index is not None:
+            self.perf_metrics["curriculum_level_index"] = int(self.env.curriculum_level_index)
 
         if self.save_image:
             finalize_episode_artifacts(self.output_dir, self.episode_artifact_stem, self.env.frame_files)

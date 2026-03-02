@@ -65,56 +65,46 @@ def _save_checkpoint(
     torch.save(checkpoint, bucket_dir / "checkpoint.pth")
 
 
-def _write_to_tensor_board(writer, tensorboard_data, curr_episode):
-    tensorboard_data = np.array(tensorboard_data)
-    tensorboard_data = list(np.nanmean(tensorboard_data, axis=0))
-    (
-        reward,
-        value,
-        policy_loss,
-        q_value_loss,
-        entropy,
-        policy_grad_norm,
-        q_value_grad_norm,
-        log_alpha,
-        alpha_loss,
-        travel_dist,
-        success_rate,
-        explored_rate,
-        episode_return,
-        episode_steps,
-    ) = tensorboard_data
+def _aggregate_metric_records(metric_records):
+    aggregated = {}
+    for record in metric_records:
+        for key, value in record.items():
+            aggregated.setdefault(key, []).append(float(value))
+    return {key: float(np.nanmean(values)) for key, values in aggregated.items() if values}
 
-    writer.add_scalar(tag="Losses/Value", scalar_value=value, global_step=curr_episode)
-    writer.add_scalar(tag="Losses/Policy Loss", scalar_value=policy_loss, global_step=curr_episode)
-    writer.add_scalar(tag="Losses/Alpha Loss", scalar_value=alpha_loss, global_step=curr_episode)
-    writer.add_scalar(tag="Losses/Q Value Loss", scalar_value=q_value_loss, global_step=curr_episode)
-    writer.add_scalar(tag="Losses/Entropy", scalar_value=entropy, global_step=curr_episode)
-    writer.add_scalar(tag="Losses/Policy Grad Norm", scalar_value=policy_grad_norm, global_step=curr_episode)
-    writer.add_scalar(tag="Losses/Q Value Grad Norm", scalar_value=q_value_grad_norm, global_step=curr_episode)
-    writer.add_scalar(tag="Losses/Log Alpha", scalar_value=log_alpha, global_step=curr_episode)
-    writer.add_scalar(tag="Perf/Reward", scalar_value=reward, global_step=curr_episode)
-    writer.add_scalar(tag="Perf/Travel Distance", scalar_value=travel_dist, global_step=curr_episode)
-    writer.add_scalar(tag="Perf/Explored Rate", scalar_value=explored_rate, global_step=curr_episode)
-    writer.add_scalar(tag="Perf/Success Rate", scalar_value=success_rate, global_step=curr_episode)
-    writer.add_scalar(tag="Perf/Episode Return", scalar_value=episode_return, global_step=curr_episode)
-    writer.add_scalar(tag="Perf/Episode Steps", scalar_value=episode_steps, global_step=curr_episode)
-    return {
-        "reward": reward,
-        "value": value,
-        "policy_loss": policy_loss,
-        "q_value_loss": q_value_loss,
-        "entropy": entropy,
-        "policy_grad_norm": policy_grad_norm,
-        "q_value_grad_norm": q_value_grad_norm,
-        "log_alpha": log_alpha,
-        "alpha_loss": alpha_loss,
-        "travel_dist": travel_dist,
-        "success_rate": success_rate,
-        "explored_rate": explored_rate,
-        "episode_return": episode_return,
-        "episode_steps": episode_steps,
+
+def _write_to_tensor_board(writer, tensorboard_data, curr_episode):
+    metrics = _aggregate_metric_records(tensorboard_data)
+
+    writer.add_scalar(tag="Losses/Value", scalar_value=metrics["value"], global_step=curr_episode)
+    writer.add_scalar(tag="Losses/Policy Loss", scalar_value=metrics["policy_loss"], global_step=curr_episode)
+    writer.add_scalar(tag="Losses/Alpha Loss", scalar_value=metrics["alpha_loss"], global_step=curr_episode)
+    writer.add_scalar(tag="Losses/Q Value Loss", scalar_value=metrics["q_value_loss"], global_step=curr_episode)
+    writer.add_scalar(tag="Losses/Entropy", scalar_value=metrics["entropy"], global_step=curr_episode)
+    writer.add_scalar(tag="Losses/Policy Grad Norm", scalar_value=metrics["policy_grad_norm"], global_step=curr_episode)
+    writer.add_scalar(tag="Losses/Q Value Grad Norm", scalar_value=metrics["q_value_grad_norm"], global_step=curr_episode)
+    writer.add_scalar(tag="Losses/Log Alpha", scalar_value=metrics["log_alpha"], global_step=curr_episode)
+    writer.add_scalar(tag="Perf/Reward", scalar_value=metrics["reward"], global_step=curr_episode)
+    writer.add_scalar(tag="Perf/Travel Distance", scalar_value=metrics["travel_dist"], global_step=curr_episode)
+    writer.add_scalar(tag="Perf/Explored Rate", scalar_value=metrics["explored_rate"], global_step=curr_episode)
+    writer.add_scalar(tag="Perf/Success Rate", scalar_value=metrics["success_rate"], global_step=curr_episode)
+    writer.add_scalar(tag="Perf/Episode Return", scalar_value=metrics["episode_return"], global_step=curr_episode)
+    writer.add_scalar(tag="Perf/Episode Steps", scalar_value=metrics["episode_steps"], global_step=curr_episode)
+
+    optional_tags = {
+        "reward_info": "Perf/Reward Info",
+        "reward_dist": "Perf/Reward Dist",
+        "reward_safe": "Perf/Reward Safe",
+        "reward_terminal": "Perf/Reward Terminal",
+        "distill_loss": "Losses/Distill",
+        "distill_lambda": "Losses/Distill Lambda",
+        "curriculum_level_index": "Perf/Curriculum Level Index",
     }
+    for key, tag in optional_tags.items():
+        if key in metrics:
+            writer.add_scalar(tag=tag, scalar_value=metrics[key], global_step=curr_episode)
+
+    return metrics
 
 
 def _write_eval_to_tensor_board(writer, eval_summary, curr_episode):
@@ -132,6 +122,36 @@ def _maybe_rotate_writer(writer, current_writer_bucket, current_train_path, epis
         writer = SummaryWriter(ensure_bucket_dir(current_train_path, episode, bucket_size))
         current_writer_bucket = writer_bucket
     return writer, current_writer_bucket
+
+
+def compute_distill_teacher_probs(q_values, edge_padding_mask, tau):
+    teacher_logits = q_values.detach().squeeze(-1)
+    invalid_mask = edge_padding_mask.squeeze(1).bool()
+    tau = max(float(tau), 1e-6)
+    teacher_logits = teacher_logits.masked_fill(invalid_mask, -1e8)
+    teacher_probs = torch.softmax(teacher_logits / tau, dim=-1)
+    teacher_probs = teacher_probs.masked_fill(invalid_mask, 0.0)
+    teacher_probs = teacher_probs / teacher_probs.sum(dim=-1, keepdim=True).clamp_min(1e-8)
+    return teacher_probs
+
+
+def compute_distill_loss(logp, teacher_probs):
+    return -(teacher_probs * logp).sum(dim=-1).mean()
+
+
+def compute_distill_lambda(update_count, max_lambda, warmup_updates):
+    if warmup_updates <= 0:
+        return float(max_lambda)
+    return float(max_lambda) * min(max(int(update_count), 0) / float(warmup_updates), 1.0)
+
+
+def get_policy_optimizer_update_count(optimizer):
+    return int(optimizer.param_groups[0].get("distill_update_count", 0))
+
+
+def set_policy_optimizer_update_count(optimizer, update_count):
+    for param_group in optimizer.param_groups:
+        param_group["distill_update_count"] = int(update_count)
 
 
 def main(runtime_config: RuntimeConfig | None = None) -> dict:
@@ -170,6 +190,7 @@ def main(runtime_config: RuntimeConfig | None = None) -> dict:
     global_q_net1_optimizer = optim.Adam(global_q_net1.parameters(), lr=LR)
     global_q_net2_optimizer = optim.Adam(global_q_net2.parameters(), lr=LR)
     log_alpha_optimizer = optim.Adam([log_alpha], lr=1e-4)
+    set_policy_optimizer_update_count(global_policy_optimizer, 0)
     entropy_target = 0.05 * (-np.log(1 / K_SIZE))
 
     curr_episode = 0
@@ -189,6 +210,10 @@ def main(runtime_config: RuntimeConfig | None = None) -> dict:
         global_q_net1_optimizer.load_state_dict(checkpoint["q_net1_optimizer"])
         global_q_net2_optimizer.load_state_dict(checkpoint["q_net2_optimizer"])
         log_alpha_optimizer.load_state_dict(checkpoint["log_alpha_optimizer"])
+        set_policy_optimizer_update_count(
+            global_policy_optimizer,
+            get_policy_optimizer_update_count(global_policy_optimizer),
+        )
         curr_episode = checkpoint["episode"]
         next_episode = curr_episode
 
@@ -219,9 +244,8 @@ def main(runtime_config: RuntimeConfig | None = None) -> dict:
         next_episode += 1
         job_list.append(meta_agent.job.remote(weights_set, next_episode))
 
-    metric_name = ["travel_dist", "success_rate", "explored_rate", "episode_return", "episode_steps"]
     training_data = []
-    perf_metrics = {name: [] for name in metric_name}
+    perf_metrics = {}
     experience_buffer = [[] for _ in range(27)]
     save_gap = max(int(runtime_config.save_img_gap), 1)
     auto_eval_episodes = set()
@@ -237,8 +261,8 @@ def main(runtime_config: RuntimeConfig | None = None) -> dict:
                 completed_episodes.append(info["episode_number"])
                 for i in range(len(experience_buffer)):
                     experience_buffer[i] += job_results[i]
-                for name in metric_name:
-                    perf_metrics[name].append(metrics[name])
+                for name, value in metrics.items():
+                    perf_metrics.setdefault(name, []).append(value)
 
             buffer_size = len(experience_buffer[0])
             for i in range(len(experience_buffer)):
@@ -338,11 +362,30 @@ def main(runtime_config: RuntimeConfig | None = None) -> dict:
                         logp.exp().unsqueeze(2) * (log_alpha.exp().detach() * logp.unsqueeze(2) - q_values.detach()),
                         dim=1,
                     ).mean()
+                    distill_loss = torch.zeros((), device=device)
+                    distill_lambda = 0.0
+                    policy_loss_total = policy_loss
+                    if runtime_config.rl_options.use_privileged_distill:
+                        teacher_probs = compute_distill_teacher_probs(
+                            q_values,
+                            edge_padding_mask,
+                            runtime_config.rl_options.distill_tau,
+                        )
+                        distill_loss = compute_distill_loss(logp, teacher_probs)
+                        current_update_count = get_policy_optimizer_update_count(global_policy_optimizer) + 1
+                        distill_lambda = compute_distill_lambda(
+                            current_update_count,
+                            runtime_config.rl_options.distill_lambda,
+                            runtime_config.rl_options.distill_warmup_updates,
+                        )
+                        policy_loss_total = policy_loss + distill_lambda * distill_loss
 
                     global_policy_optimizer.zero_grad()
-                    policy_loss.backward()
+                    policy_loss_total.backward()
                     policy_grad_norm = torch.nn.utils.clip_grad_norm_(global_policy_net.parameters(), max_norm=100, norm_type=2)
                     global_policy_optimizer.step()
+                    if runtime_config.rl_options.use_privileged_distill:
+                        set_policy_optimizer_update_count(global_policy_optimizer, current_update_count)
 
                     with torch.no_grad():
                         next_logp = policy_wrapper(*next_observation)
@@ -354,7 +397,10 @@ def main(runtime_config: RuntimeConfig | None = None) -> dict:
                             * (next_q_values - log_alpha.exp() * next_logp.unsqueeze(2)),
                             dim=1,
                         ).unsqueeze(1)
-                        target_q = reward + GAMMA * (1 - done) * value_prime
+                        gamma_multiplier = GAMMA
+                        if runtime_config.rl_options.use_n_step_return:
+                            gamma_multiplier = GAMMA ** runtime_config.rl_options.n_step
+                        target_q = reward + gamma_multiplier * (1 - done) * value_prime
 
                     mse_loss = nn.MSELoss()
                     q_values1 = q1_wrapper(*critic_observation)
@@ -383,21 +429,27 @@ def main(runtime_config: RuntimeConfig | None = None) -> dict:
                     log_alpha_optimizer.step()
 
                     target_q_update_counter += 1
-                    perf_data = [np.nanmean(perf_metrics[name]) for name in metric_name]
-                    training_data.append(
-                        [
-                            reward.mean().item(),
-                            value_prime.mean().item(),
-                            policy_loss.item(),
-                            q1_loss.item(),
-                            entropy.mean().item(),
-                            policy_grad_norm.item(),
-                            q_grad_norm.item(),
-                            log_alpha.item(),
-                            alpha_loss.item(),
-                            *perf_data,
-                        ]
-                    )
+                    perf_data = {
+                        name: float(np.nanmean(values))
+                        for name, values in perf_metrics.items()
+                        if values
+                    }
+                    training_record = {
+                        "reward": reward.mean().item(),
+                        "value": value_prime.mean().item(),
+                        "policy_loss": policy_loss_total.item(),
+                        "q_value_loss": q1_loss.item(),
+                        "entropy": entropy.mean().item(),
+                        "policy_grad_norm": policy_grad_norm.item(),
+                        "q_value_grad_norm": q_grad_norm.item(),
+                        "log_alpha": log_alpha.item(),
+                        "alpha_loss": alpha_loss.item(),
+                    }
+                    if runtime_config.rl_options.use_privileged_distill:
+                        training_record["distill_loss"] = distill_loss.item()
+                        training_record["distill_lambda"] = float(distill_lambda)
+                    training_record.update(perf_data)
+                    training_data.append(training_record)
 
             if len(training_data) >= runtime_config.summary_window:
                 writer, current_writer_bucket = _maybe_rotate_writer(
@@ -418,7 +470,7 @@ def main(runtime_config: RuntimeConfig | None = None) -> dict:
                         },
                     )
                 training_data = []
-                perf_metrics = {name: [] for name in metric_name}
+                perf_metrics = {}
 
             weights_set = [_state_dict_to_device(global_policy_net.state_dict(), local_device)]
 
