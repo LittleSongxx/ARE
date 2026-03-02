@@ -3,6 +3,8 @@ build/
 devel/
 logs/
 src/DARE/
+src/HDPlanner_Exp_and_Nav/
+src/ariadne2_opt
 *.pyc
 __pycache__/
 .catkin_workspace

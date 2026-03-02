@@ -46,7 +46,7 @@ K_SIZE = 25  # the number of neighboring nodes, fixed
 NODE_PADDING_SIZE = 360  # the number of nodes will be padded to this value, need it for batch training
 
 # GPU usage
-USE_GPU = False  # do you want to collect training data using GPUs (better not)
+USE_GPU = True  # do you want to collect training data using GPUs (better not)
 USE_GPU_GLOBAL = True  # do you want to train the network using GPUs
-NUM_GPU = 0  # 0 unless you want to collect data using GPUs
+NUM_GPU = 1  # 0 unless you want to collect data using GPUs
 
