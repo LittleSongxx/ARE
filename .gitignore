@@ -31,3 +31,19 @@ Thumbs.db
 # *.png
 # *.dae
 # *.ply
+
+# Package assets/artifacts under src
+src/**/maps/
+src/**/gifs/
+src/**/gifts/
+src/**/eval/
+
+# Image files under src packages
+src/**/*.png
+src/**/*.jpg
+src/**/*.jpeg
+src/**/*.gif
+src/**/*.bmp
+src/**/*.tif
+src/**/*.tiff
+src/**/*.webp
