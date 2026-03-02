@@ -1,0 +1,39 @@
+{
+  "latest_episode": {
+    "train_metrics": 2,
+    "eval_metrics": 2,
+    "system_metrics": 2
+  },
+  "latest_metrics": {
+    "train_metrics": {
+      "reward": -0.3756406605243683,
+      "value": 0.22603043913841248,
+      "policy_loss": -0.11996369808912277,
+      "q_value_loss": 0.2397242933511734,
+      "entropy": -2.7502002716064453,
+      "policy_grad_norm": 1.8397514820098877,
+      "q_value_grad_norm": 11.981544494628906,
+      "log_alpha": -2.000200033187866,
+      "alpha_loss": -5.178771495819092,
+      "travel_dist": 85.0056307974577,
+      "success_rate": 0.0,
+      "explored_rate": 0.2492586678832117,
+      "episode_return": -4.248335795808848,
+      "episode_steps": 10.0
+    },
+    "eval_metrics": {
+      "episodes": 1,
+      "explored_rate": 0.2842153284671533,
+      "travel_dist": 83.55417527999327,
+      "success_rate": 0.0,
+      "episode_return": -4.383426277580225,
+      "steps_taken": 10.0,
+      "best_explored_rate": 0.2842153284671533,
+      "worst_explored_rate": 0.2842153284671533
+    },
+    "system_metrics": {
+      "buffer_size": 20,
+      "completed_episodes": 2
+    }
+  }
+}
