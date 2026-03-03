@@ -25,7 +25,9 @@ from ariadne_wavelet_attnbias.parameter import (
     SMOKE_FOLDER_NAME,
     configure_attention_bias,
     configure_rl_options,
+    get_run_identity_from_checkpoint,
     get_rl_options,
+    resolve_resume_checkpoint,
 )
 
 
@@ -72,9 +74,6 @@ def _baseline_smoke_overrides():
         "summary_window": 1,
         "train_updates_per_iter": 1,
         "result_bucket_episodes": 1,
-        "use_gpu": False,
-        "use_gpu_global": False,
-        "num_gpu": 0,
         "auto_eval_episodes": 1,
         "auto_eval_device": "cpu",
         "run_name": SMOKE_FOLDER_NAME,
@@ -122,6 +121,14 @@ def build_runtime_config(args):
         overrides["enable_auto_eval"] = False
     if args.sampled_auto_eval:
         overrides["auto_eval_greedy"] = False
+    if args.disable_fixed_eval_maps:
+        overrides["use_fixed_eval_maps"] = False
+    if args.eval_benchmark_map:
+        overrides["eval_benchmark_maps"] = tuple(args.eval_benchmark_map)
+    if args.resume_from is not None:
+        overrides["resume_from"] = args.resume_from
+        overrides["run_name"] = args.resume_run_name
+        overrides["run_session"] = args.resume_session
     if overrides:
         config = config.with_overrides(**overrides)
     return config.with_overrides(rl_options=get_rl_options())
@@ -165,6 +172,7 @@ def parse_args():
     parser = argparse.ArgumentParser()
     parser.add_argument("--smoke", action="store_true")
     parser.add_argument("--smoke-all-features", action="store_true")
+    parser.add_argument("--resume-from", dest="resume_from")
     parser.add_argument("--disable-attention-bias", action="store_true")
     parser.add_argument("--attn-bias-mode", choices=("diff", "open", "hybrid"))
     parser.add_argument("--attn-bias-beta", type=float)
@@ -186,6 +194,8 @@ def parse_args():
     parser.add_argument("--curriculum-dir", action="append")
     parser.add_argument("--curriculum-pattern", action="append")
     parser.add_argument("--use-curriculum-in-eval", action="store_true")
+    parser.add_argument("--disable-fixed-eval-maps", action="store_true")
+    parser.add_argument("--eval-benchmark-map", action="append")
     parser.add_argument("--max-episodes", dest="max_episodes", type=int)
     parser.add_argument("--num-meta-agent", dest="num_meta_agent", type=int)
     parser.add_argument("--max-episode-step", dest="max_episode_step", type=int)
@@ -205,7 +215,23 @@ def parse_args():
     parser.add_argument("--sampled-auto-eval", action="store_true")
     parser.add_argument("--run-name", dest="run_name")
     parser.add_argument("--run-session", dest="run_session")
-    return parser.parse_args()
+    args = parser.parse_args()
+
+    if args.resume_from is not None:
+        if args.smoke or args.smoke_all_features:
+            parser.error("--resume-from cannot be used with smoke presets")
+        if args.run_session is not None:
+            parser.error("--resume-from cannot be used with --run-session")
+        resume_path, resume_session = resolve_resume_checkpoint(args.resume_from)
+        resume_run_name, _ = get_run_identity_from_checkpoint(resume_path)
+        args.resume_from = str(resume_path)
+        args.resume_session = resume_session
+        args.resume_run_name = resume_run_name
+    else:
+        args.resume_session = None
+        args.resume_run_name = None
+
+    return args
 
 
 def main_cli():
@@ -218,10 +244,10 @@ def main_cli():
     configure_rl_from_args(args)
     runtime_config = build_runtime_config(args)
     result = main(runtime_config)
-    print(f"checkpoint_path={result['checkpoint_path']}")
-    print(f"model_dir={result['model_dir']}")
-    print(f"train_dir={result['train_dir']}")
-    print(f"gif_dir={result['gif_dir']}")
+    print(f"checkpoint_path={result['checkpoint_path'] or '<none>'}")
+    print(f"model_dir={result['model_dir'] or '<none>'}")
+    print(f"result_gif_dir={result['result_gif_dir']}")
+    print(f"result_eval_dir={result['result_eval_dir']}")
 
 
 if __name__ == "__main__":

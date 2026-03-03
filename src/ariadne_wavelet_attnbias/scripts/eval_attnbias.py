@@ -18,13 +18,14 @@ SRC_ROOT = Path(__file__).resolve().parents[2]
 if str(SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(SRC_ROOT))
 
-from ariadne_wavelet_attnbias.evaluation import evaluate_policy, summarize_eval_results
+from ariadne_wavelet_attnbias.evaluation import evaluate_policy, save_evaluation_metrics_plot, summarize_eval_results
 from ariadne_wavelet_attnbias.parameter import (
     MAX_EPISODE_STEP,
     RuntimeConfig,
     configure_attention_bias,
     configure_rl_options,
-    ensure_output_dirs,
+    ensure_result_dirs,
+    get_result_eval_path,
     get_rl_options,
     get_latest_checkpoint_path,
     get_run_identity_from_checkpoint,
@@ -116,6 +117,8 @@ def parse_args():
     parser.add_argument("--curriculum-dir", action="append")
     parser.add_argument("--curriculum-pattern", action="append")
     parser.add_argument("--use-curriculum-in-eval", action="store_true")
+    parser.add_argument("--disable-fixed-eval-maps", action="store_true")
+    parser.add_argument("--eval-benchmark-map", action="append")
     return parser.parse_args()
 
 
@@ -129,8 +132,15 @@ def main():
     configure_rl_from_args(args)
 
     run_name, run_session = get_run_identity_from_checkpoint(args.checkpoint)
-    output_config = RuntimeConfig(run_name=run_name, run_session=run_session, rl_options=get_rl_options())
-    ensure_output_dirs(output_config)
+    runtime_overrides = {}
+    if args.disable_fixed_eval_maps:
+        runtime_overrides["use_fixed_eval_maps"] = False
+    if args.eval_benchmark_map:
+        runtime_overrides["eval_benchmark_maps"] = tuple(args.eval_benchmark_map)
+    output_config = RuntimeConfig(run_name=run_name, run_session=run_session, rl_options=get_rl_options()).with_overrides(
+        **runtime_overrides
+    )
+    ensure_result_dirs(output_config)
 
     checkpoint = torch.load(args.checkpoint, map_location=args.device, weights_only=False)
     results = evaluate_policy(
@@ -143,6 +153,7 @@ def main():
         result_bucket_episodes=args.result_bucket_episodes,
         max_episode_step=args.max_episode_step,
     )
+    plot_path = save_evaluation_metrics_plot(results, get_result_eval_path(output_config))
     for result in results:
         print(
             f"episode={result['episode']} "
@@ -164,6 +175,7 @@ def main():
         f"episode_return={summary['episode_return']:.4f} "
         f"steps_taken={summary['steps_taken']:.2f}"
     )
+    print(f"eval_plot={plot_path}")
 
 
 if __name__ == "__main__":

@@ -9,7 +9,6 @@ import re
 
 PACKAGE_ROOT = Path(__file__).resolve().parent
 SRC_ROOT = PACKAGE_ROOT.parent
-BASELINE_ROOT = SRC_ROOT / "large-scale-DRL-exploration"
 
 
 def _resolve_maps_dir() -> Path:
@@ -17,16 +16,11 @@ def _resolve_maps_dir() -> Path:
     if override:
         return Path(override).expanduser().resolve()
 
-    candidates = [
-        PACKAGE_ROOT / "maps",
-        SRC_ROOT / "ariadne_wavelet" / "maps",
-        BASELINE_ROOT / "maps",
-        SRC_ROOT / "maps",
-    ]
+    candidates = [PACKAGE_ROOT / "maps"]
     for candidate in candidates:
         if candidate.exists():
             return candidate
-    return candidates[1]
+    return candidates[0]
 
 
 MAPS_DIR = _resolve_maps_dir()
@@ -36,10 +30,17 @@ MAPS_DIR = _resolve_maps_dir()
 FOLDER_NAME = "ariadne_wavelet_attnbias_run1"
 SMOKE_FOLDER_NAME = f"{FOLDER_NAME}_smoke"
 model_path = PACKAGE_ROOT / "model"
-train_path = PACKAGE_ROOT / "train"
-gifs_path = PACKAGE_ROOT / "gifs"
+result_path = PACKAGE_ROOT / "result"
 checkpoint_path = model_path / "checkpoint.pth"
 RESULT_BUCKET_EPISODES = 100  # folders like episodes_100, episodes_200
+USE_FIXED_EVAL_MAPS = True
+EVAL_BENCHMARK_MAPS = (
+    "img_1714.png",
+    "img_4474.png",
+    "326.png",
+    "img_965.png",
+    "img_869.png",
+)
 
 
 # save training data
@@ -330,6 +331,7 @@ class RuntimeConfig:
     train_updates_per_iter: int = TRAIN_UPDATES_PER_ITER
     result_bucket_episodes: int = RESULT_BUCKET_EPISODES
     load_model: bool = LOAD_MODEL
+    resume_from: str | None = None
     use_gpu: bool = USE_GPU
     use_gpu_global: bool = USE_GPU_GLOBAL
     num_gpu: int = NUM_GPU
@@ -340,6 +342,8 @@ class RuntimeConfig:
     auto_eval_episodes: int = 1
     auto_eval_greedy: bool = True
     auto_eval_device: str = "cpu"
+    use_fixed_eval_maps: bool = USE_FIXED_EVAL_MAPS
+    eval_benchmark_maps: tuple[str, ...] = tuple(EVAL_BENCHMARK_MAPS)
     run_name: str = FOLDER_NAME
     run_session: str | None = None
     rl_options: RLOptions = field(default_factory=get_rl_options)
@@ -360,10 +364,42 @@ def _get_run_suffix(run_name: str | None) -> str:
     return f"_{run_name}"
 
 
+def _require_run_session(runtime_config: RuntimeConfig | None) -> str:
+    if runtime_config is None or not str(runtime_config.run_session or "").strip():
+        raise ValueError("Artifact paths require runtime_config.run_session to be set")
+    return str(runtime_config.run_session).strip()
+
+
 def _append_run_session(base_path: Path, runtime_config: RuntimeConfig | None = None) -> Path:
-    if runtime_config is not None and runtime_config.run_session:
-        return base_path / runtime_config.run_session
-    return base_path
+    return base_path / _require_run_session(runtime_config)
+
+
+def is_smoke_run(runtime_config_or_run_name: RuntimeConfig | str | None = None) -> bool:
+    if isinstance(runtime_config_or_run_name, RuntimeConfig):
+        run_name = runtime_config_or_run_name.run_name
+    else:
+        run_name = runtime_config_or_run_name
+    return str(run_name or FOLDER_NAME).strip() == SMOKE_FOLDER_NAME
+
+
+def get_result_root() -> Path:
+    return result_path
+
+
+def get_result_split(runtime_config: RuntimeConfig | None = None) -> str:
+    return "smoke" if is_smoke_run(runtime_config) else "train"
+
+
+def get_result_gifs_path(runtime_config: RuntimeConfig | None = None) -> Path:
+    return _append_run_session(get_result_root() / get_result_split(runtime_config) / "gifs", runtime_config)
+
+
+def get_result_eval_path(runtime_config: RuntimeConfig | None = None) -> Path:
+    return _append_run_session(get_result_root() / get_result_split(runtime_config) / "eval", runtime_config)
+
+
+def get_monitor_state_path(runtime_config: RuntimeConfig | None = None) -> Path:
+    return get_result_eval_path(runtime_config) / ".state"
 
 
 def get_model_path(runtime_config: RuntimeConfig | None = None) -> Path:
@@ -371,15 +407,15 @@ def get_model_path(runtime_config: RuntimeConfig | None = None) -> Path:
 
 
 def get_train_path(runtime_config: RuntimeConfig | None = None) -> Path:
-    return _append_run_session(train_path, runtime_config)
+    return get_result_eval_path(runtime_config)
 
 
 def get_gifs_path(runtime_config: RuntimeConfig | None = None) -> Path:
-    return _append_run_session(gifs_path, runtime_config)
+    return get_result_gifs_path(runtime_config)
 
 
 def get_monitor_path(runtime_config: RuntimeConfig | None = None) -> Path:
-    return get_train_path(runtime_config) / "monitor"
+    return get_result_eval_path(runtime_config)
 
 
 def get_checkpoint_path(runtime_config: RuntimeConfig | None = None) -> Path:
@@ -391,13 +427,15 @@ def get_latest_checkpoint_path(run_name: str = FOLDER_NAME) -> Path:
         return model_path / "checkpoint.pth"
 
     session_dirs = sorted(
-        [path for path in model_path.iterdir() if path.is_dir() and (path / "checkpoint.pth").exists()],
+        [
+            path
+            for path in model_path.iterdir()
+            if path.is_dir() and not path.name.endswith("_smoke") and (path / "checkpoint.pth").is_file()
+        ],
         key=lambda path: path.name,
     )
-    filtered_dirs = [path for path in session_dirs if _get_run_suffix(run_name) == "" and not path.name.endswith("_smoke")]
-    if run_name == SMOKE_FOLDER_NAME:
-        filtered_dirs = [path for path in session_dirs if path.name.endswith("_smoke")]
-    elif run_name not in (FOLDER_NAME, "", None):
+    filtered_dirs = [path for path in session_dirs if _get_run_suffix(run_name) == ""]
+    if run_name not in (FOLDER_NAME, SMOKE_FOLDER_NAME, "", None):
         filtered_dirs = [path for path in session_dirs if path.name.endswith(_get_run_suffix(run_name))]
 
     if filtered_dirs:
@@ -413,10 +451,10 @@ def get_run_identity_from_checkpoint(checkpoint_file: str | Path) -> tuple[str, 
     try:
         relative = checkpoint_file.relative_to(model_root)
     except ValueError:
-        return FOLDER_NAME, None
+        return FOLDER_NAME, checkpoint_file.stem
 
     if not relative.parts:
-        return FOLDER_NAME, None
+        return FOLDER_NAME, checkpoint_file.stem
 
     run_session = relative.parts[0]
     match = re.fullmatch(r"\d{4}_\d{4}_\d{4}(?:_(.+))?", run_session)
@@ -430,11 +468,35 @@ def get_run_identity_from_checkpoint(checkpoint_file: str | Path) -> tuple[str, 
     return FOLDER_NAME, run_session
 
 
+def resolve_resume_checkpoint(checkpoint_file: str | Path) -> tuple[Path, str]:
+    checkpoint_file = Path(checkpoint_file).expanduser().resolve()
+    if not checkpoint_file.is_file():
+        raise ValueError(f"Resume checkpoint does not exist or is not a file: {checkpoint_file}")
+
+    model_root = model_path.resolve()
+    try:
+        relative = checkpoint_file.relative_to(model_root)
+    except ValueError as exc:
+        raise ValueError(f"Resume checkpoint must be inside {model_root}") from exc
+
+    if len(relative.parts) != 2 or relative.parts[1] != "checkpoint.pth":
+        raise ValueError(f"Resume checkpoint must match model/<run_session>/checkpoint.pth: {checkpoint_file}")
+
+    run_name, run_session = get_run_identity_from_checkpoint(checkpoint_file)
+    if run_session is None or is_smoke_run(run_name):
+        raise ValueError(f"Resume checkpoint must be a normal training checkpoint: {checkpoint_file}")
+    return checkpoint_file, run_session
+
+
+def ensure_result_dirs(runtime_config: RuntimeConfig | None = None) -> None:
+    get_result_gifs_path(runtime_config).mkdir(parents=True, exist_ok=True)
+    get_result_eval_path(runtime_config).mkdir(parents=True, exist_ok=True)
+
+
 def ensure_output_dirs(runtime_config: RuntimeConfig | None = None) -> None:
-    get_model_path(runtime_config).mkdir(parents=True, exist_ok=True)
-    get_train_path(runtime_config).mkdir(parents=True, exist_ok=True)
-    get_gifs_path(runtime_config).mkdir(parents=True, exist_ok=True)
-    get_monitor_path(runtime_config).mkdir(parents=True, exist_ok=True)
+    ensure_result_dirs(runtime_config)
+    if not is_smoke_run(runtime_config):
+        get_model_path(runtime_config).mkdir(parents=True, exist_ok=True)
 
 
 def configure_attention_bias(

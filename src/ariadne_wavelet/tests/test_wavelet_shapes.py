@@ -59,6 +59,7 @@ class WaveletShapeTests(unittest.TestCase):
             save_img_gap=1,
             summary_window=1,
             train_updates_per_iter=1,
+            run_session="test_wavelet_shapes",
         )
         worker = Worker(0, model, 0, runtime_config=runtime_config, device="cpu", save_image=False)
         worker.robot.update_planning_state(worker.env.belief_info, worker.env.robot_location)

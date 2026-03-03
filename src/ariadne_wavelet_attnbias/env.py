@@ -92,12 +92,14 @@ class Env:
         artifact_stem=None,
         runtime_config: RuntimeConfig | None = None,
         curriculum_override: bool | None = None,
+        forced_map_path: str | Path | None = None,
     ):
         self.episode_index = episode_index
         self.plot = plot
         self.runtime_config = runtime_config or RuntimeConfig()
         self.rl_options = self.runtime_config.rl_options
         self.curriculum_override = curriculum_override
+        self.forced_map_path = Path(forced_map_path).resolve() if forced_map_path is not None else None
         self.maps_dir = parameter.MAPS_DIR
         self.curriculum_level = None
         self.curriculum_level_index = None
@@ -139,12 +141,17 @@ class Env:
             self.trajectory_y = [self.robot_location[1]]
 
     def import_ground_truth(self, episode_index):
-        map_path, curriculum_level, curriculum_level_index = select_map_path_for_episode(
-            self.maps_dir,
-            episode_index,
-            self.rl_options,
-            curriculum_override=self.curriculum_override,
-        )
+        if self.forced_map_path is not None:
+            map_path = self.forced_map_path
+            curriculum_level = None
+            curriculum_level_index = None
+        else:
+            map_path, curriculum_level, curriculum_level_index = select_map_path_for_episode(
+                self.maps_dir,
+                episode_index,
+                self.rl_options,
+                curriculum_override=self.curriculum_override,
+            )
         self.curriculum_level = curriculum_level
         self.curriculum_level_index = curriculum_level_index
         ground_truth = (io.imread(map_path, as_gray=True) * 255).astype(int)

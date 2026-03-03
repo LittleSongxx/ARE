@@ -15,7 +15,7 @@ from .parameter import (
     MAX_EPISODE_STEP,
     NODE_INPUT_DIM,
     RuntimeConfig,
-    ensure_output_dirs,
+    ensure_result_dirs,
     get_gifs_path,
 )
 from .utils import (
@@ -28,6 +28,38 @@ from .utils import (
 
 def _copy_state_dict_to_device(state_dict, device):
     return {key: value.detach().to(device) for key, value in state_dict.items()}
+
+
+def save_evaluation_metrics_plot(results: list[dict[str, object]], output_dir: str | Path) -> Path:
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    plot_path = output_dir / "evaluation_metrics.png"
+
+    metrics = [
+        ("explored_rate", "Explored Rate"),
+        ("travel_dist", "Travel Distance"),
+        ("success", "Success"),
+        ("episode_return", "Episode Return"),
+        ("steps_taken", "Steps Taken"),
+    ]
+    episodes = [int(result["episode"]) for result in results]
+    fig, axes = plt.subplots(len(metrics), 1, figsize=(9, 3 * len(metrics)))
+    axes = np.atleast_1d(axes)
+
+    for axis, (key, title) in zip(axes, metrics):
+        values = [float(result[key]) for result in results]
+        if len(values) <= 1:
+            axis.bar([episodes[0] if episodes else 0], values or [0.0], width=0.6, color="#2f6db3")
+        else:
+            axis.plot(episodes, values, marker="o", linewidth=2.0, color="#2f6db3")
+        axis.set_title(title)
+        axis.set_xlabel("Episode")
+        axis.grid(True, alpha=0.3)
+
+    fig.tight_layout()
+    fig.savefig(plot_path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    return plot_path
 
 
 def save_eval_frame(output_dir, artifact_stem, env, agent, episode_id, step, trajectory, frame_files):
@@ -123,7 +155,7 @@ def evaluate_policy(
     max_episode_step: int = MAX_EPISODE_STEP,
 ):
     output_config = output_config or RuntimeConfig()
-    ensure_output_dirs(output_config)
+    ensure_result_dirs(output_config)
     eval_gifs_path = get_gifs_path(output_config)
     eval_device = torch.device(device)
 

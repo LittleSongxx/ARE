@@ -7,7 +7,6 @@ import ray
 import torch
 import torch.nn as nn
 import torch.optim as optim
-from torch.utils.tensorboard import SummaryWriter
 
 from .evaluation import evaluate_policy, summarize_eval_results
 from .model import PolicyNet, QNet
@@ -24,15 +23,56 @@ from .parameter import (
     get_gifs_path,
     get_model_path,
     get_monitor_path,
-    get_train_path,
+    get_result_eval_path,
+    is_smoke_run,
 )
 from .training_monitor import TrainingMonitor
 from .runner import Runner
-from .utils import ensure_bucket_dir, get_bucket_name
 
 
 def _state_dict_to_device(state_dict, device):
     return {key: value.detach().to(device) for key, value in state_dict.items()}
+
+
+def _cuda_runtime_status() -> tuple[bool, str | None]:
+    if not torch.cuda.is_available():
+        return False, "No CUDA GPUs are available"
+    try:
+        probe = torch.zeros(1, device="cuda")
+        probe = probe + 1
+        probe.item()
+        torch.cuda.synchronize()
+    except (AssertionError, RuntimeError) as exc:
+        return False, str(exc)
+    return True, None
+
+
+def _resolve_learner_device(runtime_config: RuntimeConfig) -> torch.device:
+    if not runtime_config.use_gpu_global:
+        return torch.device("cpu")
+    cuda_ok, reason = _cuda_runtime_status()
+    if cuda_ok:
+        return torch.device("cuda")
+    print(f"CUDA is unavailable for the learner; falling back to CPU. Reason: {reason}")
+    return torch.device("cpu")
+
+
+def _resolve_worker_runtime(runtime_config: RuntimeConfig) -> tuple[RuntimeConfig, float]:
+    if not runtime_config.use_gpu or runtime_config.num_gpu <= 0:
+        return runtime_config.with_overrides(use_gpu=False, num_gpu=0), 0.0
+
+    cuda_ok, reason = _cuda_runtime_status()
+    if not cuda_ok:
+        print(f"CUDA is unavailable for workers; remote workers will run on CPU. Reason: {reason}")
+        return runtime_config.with_overrides(use_gpu=False, num_gpu=0), 0.0
+
+    available_gpus = float(ray.cluster_resources().get("GPU", 0.0))
+    if available_gpus <= 0:
+        print("Ray reports no GPU resources for workers; remote workers will run on CPU.")
+        return runtime_config.with_overrides(use_gpu=False, num_gpu=0), 0.0
+
+    requested_gpus = min(float(runtime_config.num_gpu), available_gpus)
+    return runtime_config, requested_gpus / max(runtime_config.num_meta_agent, 1)
 
 
 def _save_checkpoint(
@@ -45,9 +85,7 @@ def _save_checkpoint(
     global_q_net2_optimizer,
     log_alpha_optimizer,
     curr_episode,
-    bucket_size,
     current_checkpoint_path,
-    current_model_path,
 ):
     checkpoint = {
         "policy_model": global_policy_net.state_dict(),
@@ -61,8 +99,6 @@ def _save_checkpoint(
         "episode": curr_episode,
     }
     torch.save(checkpoint, current_checkpoint_path)
-    bucket_dir = ensure_bucket_dir(current_model_path, curr_episode, bucket_size)
-    torch.save(checkpoint, bucket_dir / "checkpoint.pth")
 
 
 def _aggregate_metric_records(metric_records):
@@ -73,55 +109,9 @@ def _aggregate_metric_records(metric_records):
     return {key: float(np.nanmean(values)) for key, values in aggregated.items() if values}
 
 
-def _write_to_tensor_board(writer, tensorboard_data, curr_episode):
+def _aggregate_train_metrics(tensorboard_data):
     metrics = _aggregate_metric_records(tensorboard_data)
-
-    writer.add_scalar(tag="Losses/Value", scalar_value=metrics["value"], global_step=curr_episode)
-    writer.add_scalar(tag="Losses/Policy Loss", scalar_value=metrics["policy_loss"], global_step=curr_episode)
-    writer.add_scalar(tag="Losses/Alpha Loss", scalar_value=metrics["alpha_loss"], global_step=curr_episode)
-    writer.add_scalar(tag="Losses/Q Value Loss", scalar_value=metrics["q_value_loss"], global_step=curr_episode)
-    writer.add_scalar(tag="Losses/Entropy", scalar_value=metrics["entropy"], global_step=curr_episode)
-    writer.add_scalar(tag="Losses/Policy Grad Norm", scalar_value=metrics["policy_grad_norm"], global_step=curr_episode)
-    writer.add_scalar(tag="Losses/Q Value Grad Norm", scalar_value=metrics["q_value_grad_norm"], global_step=curr_episode)
-    writer.add_scalar(tag="Losses/Log Alpha", scalar_value=metrics["log_alpha"], global_step=curr_episode)
-    writer.add_scalar(tag="Perf/Reward", scalar_value=metrics["reward"], global_step=curr_episode)
-    writer.add_scalar(tag="Perf/Travel Distance", scalar_value=metrics["travel_dist"], global_step=curr_episode)
-    writer.add_scalar(tag="Perf/Explored Rate", scalar_value=metrics["explored_rate"], global_step=curr_episode)
-    writer.add_scalar(tag="Perf/Success Rate", scalar_value=metrics["success_rate"], global_step=curr_episode)
-    writer.add_scalar(tag="Perf/Episode Return", scalar_value=metrics["episode_return"], global_step=curr_episode)
-    writer.add_scalar(tag="Perf/Episode Steps", scalar_value=metrics["episode_steps"], global_step=curr_episode)
-
-    optional_tags = {
-        "reward_info": "Perf/Reward Info",
-        "reward_dist": "Perf/Reward Dist",
-        "reward_safe": "Perf/Reward Safe",
-        "reward_terminal": "Perf/Reward Terminal",
-        "distill_loss": "Losses/Distill",
-        "distill_lambda": "Losses/Distill Lambda",
-        "curriculum_level_index": "Perf/Curriculum Level Index",
-    }
-    for key, tag in optional_tags.items():
-        if key in metrics:
-            writer.add_scalar(tag=tag, scalar_value=metrics[key], global_step=curr_episode)
-
     return metrics
-
-
-def _write_eval_to_tensor_board(writer, eval_summary, curr_episode):
-    writer.add_scalar(tag="Eval/Explored Rate", scalar_value=eval_summary["explored_rate"], global_step=curr_episode)
-    writer.add_scalar(tag="Eval/Travel Distance", scalar_value=eval_summary["travel_dist"], global_step=curr_episode)
-    writer.add_scalar(tag="Eval/Success Rate", scalar_value=eval_summary["success_rate"], global_step=curr_episode)
-    writer.add_scalar(tag="Eval/Episode Return", scalar_value=eval_summary["episode_return"], global_step=curr_episode)
-    writer.add_scalar(tag="Eval/Steps Taken", scalar_value=eval_summary["steps_taken"], global_step=curr_episode)
-
-
-def _maybe_rotate_writer(writer, current_writer_bucket, current_train_path, episode, bucket_size):
-    writer_bucket = get_bucket_name(episode, bucket_size)
-    if writer_bucket != current_writer_bucket:
-        writer.close()
-        writer = SummaryWriter(ensure_bucket_dir(current_train_path, episode, bucket_size))
-        current_writer_bucket = writer_bucket
-    return writer, current_writer_bucket
 
 
 def compute_distill_teacher_probs(q_values, edge_padding_mask, tau):
@@ -159,16 +149,13 @@ def main(runtime_config: RuntimeConfig | None = None) -> dict:
     if runtime_config.run_session is None:
         runtime_config = runtime_config.with_overrides(run_session=build_run_session(runtime_config.run_name))
     ensure_output_dirs(runtime_config)
-    current_checkpoint_path = get_checkpoint_path(runtime_config)
-    current_model_path = get_model_path(runtime_config)
-    current_train_path = get_train_path(runtime_config)
+    current_checkpoint_path = None if is_smoke_run(runtime_config) else get_checkpoint_path(runtime_config)
+    current_model_path = None if is_smoke_run(runtime_config) else get_model_path(runtime_config)
+    current_eval_path = get_result_eval_path(runtime_config)
     current_gifs_path = get_gifs_path(runtime_config)
 
-    device = torch.device("cuda") if runtime_config.use_gpu_global else torch.device("cpu")
-    local_device = torch.device("cuda") if runtime_config.use_gpu else torch.device("cpu")
+    device = _resolve_learner_device(runtime_config)
 
-    current_writer_bucket = get_bucket_name(1, runtime_config.result_bucket_episodes)
-    writer = SummaryWriter(ensure_bucket_dir(current_train_path, 1, runtime_config.result_bucket_episodes))
     training_monitor = None
     if runtime_config.enable_training_monitor:
         training_monitor = TrainingMonitor(
@@ -177,6 +164,7 @@ def main(runtime_config: RuntimeConfig | None = None) -> dict:
             snapshot_interval=runtime_config.monitor_snapshot_interval,
         )
     ray.init(ignore_reinit_error=True)
+    worker_runtime_config, worker_num_gpus = _resolve_worker_runtime(runtime_config)
 
     global_policy_net = PolicyNet(NODE_INPUT_DIM, EMBEDDING_DIM).to(device)
     global_q_net1 = QNet(NODE_INPUT_DIM + 1, EMBEDDING_DIM).to(device)
@@ -197,8 +185,14 @@ def main(runtime_config: RuntimeConfig | None = None) -> dict:
     next_episode = 0
     target_q_update_counter = 1
 
-    if runtime_config.load_model and current_checkpoint_path.exists():
-        checkpoint = torch.load(current_checkpoint_path, map_location=device, weights_only=False)
+    checkpoint_source = None
+    if runtime_config.resume_from is not None:
+        checkpoint_source = runtime_config.resume_from
+    elif runtime_config.load_model and current_checkpoint_path is not None and current_checkpoint_path.exists():
+        checkpoint_source = current_checkpoint_path
+
+    if checkpoint_source is not None:
+        checkpoint = torch.load(checkpoint_source, map_location=device, weights_only=False)
         global_policy_net.load_state_dict(checkpoint["policy_model"])
         global_q_net1.load_state_dict(checkpoint["q_net1_model"])
         global_q_net2.load_state_dict(checkpoint["q_net2_model"])
@@ -222,9 +216,12 @@ def main(runtime_config: RuntimeConfig | None = None) -> dict:
     global_target_q_net1.eval()
     global_target_q_net2.eval()
 
-    runner_options = {"num_cpus": 1, "num_gpus": runtime_config.num_gpu / max(runtime_config.num_meta_agent, 1)}
+    runner_options = {"num_cpus": 1, "num_gpus": worker_num_gpus}
     RemoteRunner = ray.remote(Runner)
-    meta_agents = [RemoteRunner.options(**runner_options).remote(i, runtime_config) for i in range(runtime_config.num_meta_agent)]
+    meta_agents = [
+        RemoteRunner.options(**runner_options).remote(i, worker_runtime_config)
+        for i in range(runtime_config.num_meta_agent)
+    ]
 
     policy_wrapper = nn.DataParallel(global_policy_net) if device.type == "cuda" and torch.cuda.device_count() > 1 else global_policy_net
     q1_wrapper = nn.DataParallel(global_q_net1) if device.type == "cuda" and torch.cuda.device_count() > 1 else global_q_net1
@@ -236,7 +233,7 @@ def main(runtime_config: RuntimeConfig | None = None) -> dict:
         nn.DataParallel(global_target_q_net2) if device.type == "cuda" and torch.cuda.device_count() > 1 else global_target_q_net2
     )
 
-    weights_set = [_state_dict_to_device(global_policy_net.state_dict(), local_device)]
+    weights_set = [_state_dict_to_device(global_policy_net.state_dict(), torch.device("cpu"))]
     job_list = []
     for meta_agent in meta_agents:
         if next_episode >= runtime_config.max_episodes:
@@ -452,15 +449,8 @@ def main(runtime_config: RuntimeConfig | None = None) -> dict:
                     training_data.append(training_record)
 
             if len(training_data) >= runtime_config.summary_window:
-                writer, current_writer_bucket = _maybe_rotate_writer(
-                    writer,
-                    current_writer_bucket,
-                    current_train_path,
-                    curr_episode,
-                    runtime_config.result_bucket_episodes,
-                )
-                train_metrics = _write_to_tensor_board(writer, training_data, curr_episode)
                 if training_monitor is not None:
+                    train_metrics = _aggregate_train_metrics(training_data)
                     training_monitor.update_train(curr_episode, train_metrics)
                     training_monitor.update_system(
                         curr_episode,
@@ -472,7 +462,7 @@ def main(runtime_config: RuntimeConfig | None = None) -> dict:
                 training_data = []
                 perf_metrics = {}
 
-            weights_set = [_state_dict_to_device(global_policy_net.state_dict(), local_device)]
+            weights_set = [_state_dict_to_device(global_policy_net.state_dict(), torch.device("cpu"))]
 
             if target_q_update_counter > 64:
                 target_q_update_counter = 1
@@ -484,65 +474,57 @@ def main(runtime_config: RuntimeConfig | None = None) -> dict:
             if not runtime_config.enable_auto_eval:
                 continue
 
-            for episode_number in sorted(completed_episodes):
-                if episode_number % save_gap != 0 or episode_number in auto_eval_episodes:
-                    continue
-                eval_results = evaluate_policy(
-                    global_policy_net.state_dict(),
+                for episode_number in sorted(completed_episodes):
+                    if episode_number % save_gap != 0 or episode_number in auto_eval_episodes:
+                        continue
+                    eval_results = evaluate_policy(
+                        global_policy_net.state_dict(),
                     output_config=runtime_config,
                     episodes=runtime_config.auto_eval_episodes,
                     start_episode=episode_number,
                     greedy=runtime_config.auto_eval_greedy,
                     device=runtime_config.auto_eval_device,
                     result_bucket_episodes=runtime_config.result_bucket_episodes,
-                    max_episode_step=runtime_config.max_episode_step,
-                )
-                eval_summary = summarize_eval_results(eval_results)
-                writer, current_writer_bucket = _maybe_rotate_writer(
-                    writer,
-                    current_writer_bucket,
-                    current_train_path,
-                    episode_number,
-                    runtime_config.result_bucket_episodes,
-                )
-                _write_eval_to_tensor_board(writer, eval_summary, episode_number)
-                if training_monitor is not None:
-                    training_monitor.update_eval(episode_number, eval_summary)
-                auto_eval_episodes.add(episode_number)
-                print(
-                    f"auto_eval episode={episode_number} "
+                        max_episode_step=runtime_config.max_episode_step,
+                    )
+                    eval_summary = summarize_eval_results(eval_results)
+                    if training_monitor is not None:
+                        training_monitor.update_eval(episode_number, eval_summary)
+                    auto_eval_episodes.add(episode_number)
+                    print(
+                        f"auto_eval episode={episode_number} "
                     f"episodes={eval_summary['episodes']} "
                     f"explored_rate={eval_summary['explored_rate']:.4f} "
                     f"travel_dist={eval_summary['travel_dist']:.2f} "
                     f"success_rate={eval_summary['success_rate']:.4f} "
                     f"episode_return={eval_summary['episode_return']:.4f} "
-                    f"steps_taken={eval_summary['steps_taken']:.2f}"
-                )
+                        f"steps_taken={eval_summary['steps_taken']:.2f}"
+                    )
 
-        _save_checkpoint(
-            global_policy_net,
-            global_q_net1,
-            global_q_net2,
-            log_alpha,
-            global_policy_optimizer,
-            global_q_net1_optimizer,
-            global_q_net2_optimizer,
-            log_alpha_optimizer,
-            curr_episode,
-            runtime_config.result_bucket_episodes,
-            current_checkpoint_path,
-            current_model_path,
-        )
+        if current_checkpoint_path is not None:
+            _save_checkpoint(
+                global_policy_net,
+                global_q_net1,
+                global_q_net2,
+                log_alpha,
+                global_policy_optimizer,
+                global_q_net1_optimizer,
+                global_q_net2_optimizer,
+                log_alpha_optimizer,
+                curr_episode,
+                current_checkpoint_path,
+            )
     finally:
-        writer.close()
         for actor in meta_agents:
             ray.kill(actor)
         ray.shutdown()
 
     return {
-        "checkpoint_path": str(current_checkpoint_path),
-        "model_dir": str(current_model_path),
-        "train_dir": str(current_train_path),
+        "checkpoint_path": str(current_checkpoint_path) if current_checkpoint_path is not None else None,
+        "model_dir": str(current_model_path) if current_model_path is not None else None,
+        "result_eval_dir": str(current_eval_path),
+        "result_gif_dir": str(current_gifs_path),
+        "train_dir": str(current_eval_path),
         "gif_dir": str(current_gifs_path),
         "episode": curr_episode,
     }

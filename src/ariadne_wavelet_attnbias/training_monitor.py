@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import shutil
 from collections import defaultdict
 from pathlib import Path
 
@@ -16,13 +15,12 @@ class TrainingMonitor:
     def __init__(self, save_dir: str | Path, window_size: int = 10, snapshot_interval: int = 10):
         self.save_dir = Path(save_dir)
         self.save_dir.mkdir(parents=True, exist_ok=True)
+        self.state_dir = self.save_dir / ".state"
+        self.state_dir.mkdir(parents=True, exist_ok=True)
         self.window_size = max(int(window_size), 1)
         self.snapshot_interval = max(int(snapshot_interval), 1)
-        self.data_file = self.save_dir / "training_history.json"
-        self.latest_metrics_file = self.save_dir / "latest_metrics.json"
-        self.summary_file = self.save_dir / "summary.txt"
+        self.data_file = self.state_dir / "training_history.json"
         self.plot_file = self.save_dir / "training_curves.png"
-        self.snapshot_root = self.save_dir / "snapshots"
 
         self.sections = {
             "train_metrics": {"episodes": [], "history": defaultdict(list)},
@@ -118,9 +116,8 @@ class TrainingMonitor:
         for key, value in metrics.items():
             section["history"][key].append(self._normalize_value(value))
 
-        self._save_all()
-        if episode % self.snapshot_interval == 0:
-            self._save_snapshot(episode)
+        self._save_data()
+        self._save_plots()
 
     def _smooth(self, values: list[float | int | bool]) -> list[float]:
         if not values:
@@ -131,12 +128,6 @@ class TrainingMonitor:
             smoothed.append(float(np.mean(values[start : idx + 1])))
         return smoothed
 
-    def _save_all(self) -> None:
-        self._save_data()
-        self._save_latest_metrics()
-        self._save_summary()
-        self._save_plots()
-
     def _save_data(self) -> None:
         payload = {"sections": {}}
         for section_name, section in self.sections.items():
@@ -145,37 +136,6 @@ class TrainingMonitor:
                 "history": {key: list(values) for key, values in section["history"].items()},
             }
         self.data_file.write_text(json.dumps(payload, indent=2))
-
-    def _save_latest_metrics(self) -> None:
-        payload = {"latest_episode": {}, "latest_metrics": {}}
-        for section_name, section in self.sections.items():
-            payload["latest_episode"][section_name] = section["episodes"][-1] if section["episodes"] else None
-            payload["latest_metrics"][section_name] = {}
-            for key, values in section["history"].items():
-                if values:
-                    payload["latest_metrics"][section_name][key] = values[-1]
-        self.latest_metrics_file.write_text(json.dumps(payload, indent=2))
-
-    def _save_summary(self) -> None:
-        lines = ["Training Monitor Summary", ""]
-        for section_name, section in self.sections.items():
-            if not section["episodes"]:
-                continue
-            lines.append(f"[{section_name}]")
-            lines.append(
-                f"episodes: {section['episodes'][0]} -> {section['episodes'][-1]}  points={len(section['episodes'])}"
-            )
-            for key, values in section["history"].items():
-                if not values:
-                    continue
-                recent = values[-min(self.window_size, len(values)) :]
-                lines.append(
-                    f"{key}: latest={float(values[-1]):.6f} "
-                    f"mean(last{len(recent)})={float(np.mean(recent)):.6f} "
-                    f"min={float(np.min(values)):.6f} max={float(np.max(values)):.6f}"
-                )
-            lines.append("")
-        self.summary_file.write_text("\n".join(lines).rstrip() + "\n")
 
     def _save_plots(self) -> None:
         num_groups = len(self.plot_groups)
@@ -216,10 +176,3 @@ class TrainingMonitor:
         plt.tight_layout(rect=[0, 0, 1, 0.97])
         fig.savefig(self.plot_file, dpi=150, bbox_inches="tight")
         plt.close(fig)
-
-    def _save_snapshot(self, episode: int) -> None:
-        snapshot_dir = self.snapshot_root / f"episode_{episode}"
-        snapshot_dir.mkdir(parents=True, exist_ok=True)
-        for source in (self.plot_file, self.data_file, self.latest_metrics_file, self.summary_file):
-            if source.exists():
-                shutil.copy2(source, snapshot_dir / source.name)

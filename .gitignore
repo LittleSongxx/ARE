@@ -34,7 +34,10 @@ Thumbs.db
 # *.ply
 
 # Package assets/artifacts under src
+maps/
 src/**/maps/
 src/**/gifs/
 src/**/gifts/
 src/**/eval/
+src/**/result/
+src/**/model/

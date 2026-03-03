@@ -181,5 +181,5 @@ if __name__ == "__main__":
     from .model import PolicyNet
 
     model = PolicyNet(NODE_INPUT_DIM, EMBEDDING_DIM)
-    worker = Worker(0, model, 77, RuntimeConfig(), save_image=False)
+    worker = Worker(0, model, 77, RuntimeConfig(run_session="worker_debug"), save_image=False)
     worker.run_episode()
