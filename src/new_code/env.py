@@ -106,7 +106,7 @@ class Env:
         return reward
 
     def plot_env(self, step, output_dir=None):
-        episode_gifs_path = output_dir or os.path.join(gifs_path, f'episode_{self.episode_index}')
+        episode_gifs_path = output_dir or os.path.join(str(get_gifs_path()), f'episode_{self.episode_index}')
         os.makedirs(episode_gifs_path, exist_ok=True)
 
         plt.subplot(1, 3, 1)

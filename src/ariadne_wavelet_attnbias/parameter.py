@@ -16,7 +16,11 @@ def _resolve_maps_dir() -> Path:
     if override:
         return Path(override).expanduser().resolve()
 
-    candidates = [PACKAGE_ROOT / "maps"]
+    candidates = [
+        PACKAGE_ROOT / "maps",
+        SRC_ROOT / "maps",
+        SRC_ROOT.parent / "maps",
+    ]
     for candidate in candidates:
         if candidate.exists():
             return candidate
@@ -45,7 +49,7 @@ EVAL_BENCHMARK_MAPS = (
 
 # save training data
 SUMMARY_WINDOW = 32
-LOAD_MODEL = False
+LOAD_MODEL = True
 
 # Original local-machine default kept for rollback/reference:
 # SAVE_IMG_GAP = 20  # every N episodes, save train visuals and run one auto eval
@@ -82,15 +86,18 @@ UPDATING_MAP_SIZE = 4 * SENSOR_RANGE + 4 * NODE_RESOLUTION
 # MINIMUM_BUFFER_SIZE=2048, BATCH_SIZE=128, LR=1e-5, GAMMA=1,
 # NUM_META_AGENT=8, TRAIN_UPDATES_PER_ITER=6, USE_GPU=False,
 # USE_GPU_GLOBAL=True, NUM_GPU=0
-MAX_EPISODES = 5000
+MAX_EPISODES = 15000
 MAX_EPISODE_STEP = 120
-REPLAY_SIZE = 40000
-MINIMUM_BUFFER_SIZE = 8000
-BATCH_SIZE = 384
+REPLAY_SIZE = 80000
+MINIMUM_BUFFER_SIZE = 24576
+BATCH_SIZE = 2816
 LR = 1e-5
 GAMMA = 1
+# 20-core server with Numba-JIT sensor/collision: workers are CPU-light,
+# so oversubscription is fine — Ray schedules up to 20 concurrently,
+# the rest queue but drain fast (~100x speedup on Bresenham loops).
 NUM_META_AGENT = 63
-TRAIN_UPDATES_PER_ITER = 8
+TRAIN_UPDATES_PER_ITER = 12
 
 
 # network parameters
@@ -152,9 +159,15 @@ USE_CURRICULUM_IN_EVAL = False
 
 
 # GPU usage
-USE_GPU = True  # enable GPU inference inside Ray workers
-USE_GPU_GLOBAL = True  # the learner uses CUDA and nn.DataParallel across visible GPUs
-NUM_GPU = 3  # reserve 3 GPUs for Ray workers; keep CUDA_VISIBLE_DEVICES aligned with the same 3 cards
+# Tuned for the current server allocation: two visible A40 45GB GPUs
+# (CUDA_VISIBLE_DEVICES=0,3). The larger learner batch is meant to keep each
+# card above ~30GB without pushing too close to the 45GB limit.
+# Rollout workers stay on CPU: their batch=1 inference is latency-sensitive and
+# does not benefit from sharing learner GPUs. The learner uses CUDA and
+# nn.DataParallel across the GPUs currently visible to this process.
+USE_GPU = False
+USE_GPU_GLOBAL = True
+NUM_GPU = 0  # 0 = auto-detect visible learner GPUs from CUDA_VISIBLE_DEVICES / torch
 
 
 def _normalize_curriculum_milestones(values: tuple[int, ...] | list[int] | None) -> tuple[int, ...]:
@@ -322,6 +335,9 @@ def get_curriculum_level(episode_index: int, rl_options: RLOptions | None = None
 class RuntimeConfig:
     max_episodes: int = MAX_EPISODES
     num_meta_agent: int = NUM_META_AGENT
+    ray_num_cpus: int | None = None
+    ray_worker_num_cpus: int | None = None
+    worker_num_threads: int | None = None
     max_episode_step: int = MAX_EPISODE_STEP
     minimum_buffer_size: int = MINIMUM_BUFFER_SIZE
     batch_size: int = BATCH_SIZE
@@ -339,7 +355,7 @@ class RuntimeConfig:
     monitor_window: int = 10
     monitor_snapshot_interval: int = 10
     enable_auto_eval: bool = True
-    auto_eval_episodes: int = 1
+    auto_eval_episodes: int = len(EVAL_BENCHMARK_MAPS)
     auto_eval_greedy: bool = True
     auto_eval_device: str = "cpu"
     use_fixed_eval_maps: bool = USE_FIXED_EVAL_MAPS
@@ -407,7 +423,7 @@ def get_model_path(runtime_config: RuntimeConfig | None = None) -> Path:
 
 
 def get_train_path(runtime_config: RuntimeConfig | None = None) -> Path:
-    return get_result_eval_path(runtime_config)
+    return _append_run_session(get_result_root() / get_result_split(runtime_config) / "tensorboard", runtime_config)
 
 
 def get_gifs_path(runtime_config: RuntimeConfig | None = None) -> Path:
@@ -415,33 +431,71 @@ def get_gifs_path(runtime_config: RuntimeConfig | None = None) -> Path:
 
 
 def get_monitor_path(runtime_config: RuntimeConfig | None = None) -> Path:
-    return get_result_eval_path(runtime_config)
+    return _append_run_session(get_result_root() / get_result_split(runtime_config) / "monitor", runtime_config)
 
 
 def get_checkpoint_path(runtime_config: RuntimeConfig | None = None) -> Path:
     return get_model_path(runtime_config) / "checkpoint.pth"
 
 
-def get_latest_checkpoint_path(run_name: str = FOLDER_NAME) -> Path:
+def get_checkpoint_final_path(runtime_config: RuntimeConfig | None = None) -> Path:
+    return get_model_path(runtime_config) / "checkpoint_final.pth"
+
+
+def get_checkpoint_interrupted_path(runtime_config: RuntimeConfig | None = None) -> Path:
+    return get_model_path(runtime_config) / "checkpoint_interrupted.pth"
+
+
+_CHECKPOINT_NAMES = ("checkpoint_interrupted.pth", "checkpoint_final.pth", "checkpoint.pth")
+
+
+def _session_has_any_checkpoint(session_dir: Path) -> bool:
+    return any((session_dir / name).is_file() for name in _CHECKPOINT_NAMES)
+
+
+def iter_checkpoint_candidates(run_name: str = FOLDER_NAME) -> list[Path]:
+    """Return candidate checkpoint paths ordered by priority (newest session
+    first, within each session: interrupted > final > regular), matching the
+    convention used by ``new_code``.
+    """
     if not model_path.exists():
-        return model_path / "checkpoint.pth"
+        return [model_path / "checkpoint.pth"]
 
     session_dirs = sorted(
         [
             path
             for path in model_path.iterdir()
-            if path.is_dir() and not path.name.endswith("_smoke") and (path / "checkpoint.pth").is_file()
+            if path.is_dir()
+            and not path.name.endswith("_smoke")
+            and _session_has_any_checkpoint(path)
         ],
         key=lambda path: path.name,
+        reverse=True,
     )
-    filtered_dirs = [path for path in session_dirs if _get_run_suffix(run_name) == ""]
-    if run_name not in (FOLDER_NAME, SMOKE_FOLDER_NAME, "", None):
-        filtered_dirs = [path for path in session_dirs if path.name.endswith(_get_run_suffix(run_name))]
 
-    if filtered_dirs:
-        return filtered_dirs[-1] / "checkpoint.pth"
-    if session_dirs:
-        return session_dirs[-1] / "checkpoint.pth"
+    # Apply run-name filter when the caller asks for a specific run suffix.
+    if run_name not in (FOLDER_NAME, SMOKE_FOLDER_NAME, "", None):
+        suffix = _get_run_suffix(run_name)
+        filtered = [p for p in session_dirs if p.name.endswith(suffix)]
+        if filtered:
+            session_dirs = filtered
+
+    candidates: list[Path] = []
+    for session_dir in session_dirs:
+        for name in _CHECKPOINT_NAMES:
+            candidates.append(session_dir / name)
+    return candidates or [model_path / "checkpoint.pth"]
+
+
+def get_latest_checkpoint_path(run_name: str = FOLDER_NAME) -> Path:
+    """Return the most recent existing checkpoint across all sessions.
+
+    Search order per session (newest first):
+    ``checkpoint_interrupted.pth`` → ``checkpoint_final.pth`` → ``checkpoint.pth``
+    """
+    for candidate in iter_checkpoint_candidates(run_name):
+        if candidate.exists():
+            return candidate
     return model_path / "checkpoint.pth"
 
 
@@ -479,8 +533,10 @@ def resolve_resume_checkpoint(checkpoint_file: str | Path) -> tuple[Path, str]:
     except ValueError as exc:
         raise ValueError(f"Resume checkpoint must be inside {model_root}") from exc
 
-    if len(relative.parts) != 2 or relative.parts[1] != "checkpoint.pth":
-        raise ValueError(f"Resume checkpoint must match model/<run_session>/checkpoint.pth: {checkpoint_file}")
+    if len(relative.parts) != 2 or relative.parts[1] not in _CHECKPOINT_NAMES:
+        raise ValueError(
+            f"Resume checkpoint must match model/<run_session>/<checkpoint_name>.pth: {checkpoint_file}"
+        )
 
     run_name, run_session = get_run_identity_from_checkpoint(checkpoint_file)
     if run_session is None or is_smoke_run(run_name):
@@ -495,6 +551,8 @@ def ensure_result_dirs(runtime_config: RuntimeConfig | None = None) -> None:
 
 def ensure_output_dirs(runtime_config: RuntimeConfig | None = None) -> None:
     ensure_result_dirs(runtime_config)
+    get_train_path(runtime_config).mkdir(parents=True, exist_ok=True)
+    get_monitor_path(runtime_config).mkdir(parents=True, exist_ok=True)
     if not is_smoke_run(runtime_config):
         get_model_path(runtime_config).mkdir(parents=True, exist_ok=True)
 

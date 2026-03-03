@@ -18,6 +18,7 @@ from .parameter import (
     RuntimeConfig,
     ensure_result_dirs,
     get_gifs_path,
+    get_result_eval_path,
 )
 from .utils import (
     build_artifact_stem,
@@ -172,7 +173,7 @@ def evaluate_policy(
 ):
     output_config = output_config or RuntimeConfig()
     ensure_result_dirs(output_config)
-    eval_gifs_path = get_gifs_path(output_config)
+    eval_gifs_path = get_result_eval_path(output_config)
     eval_device = torch.device(device)
     benchmark_maps = resolve_benchmark_eval_maps(output_config) if output_config.use_fixed_eval_maps else None
 

@@ -97,6 +97,9 @@ def build_runtime_config(args):
     for field in (
         "max_episodes",
         "num_meta_agent",
+        "ray_num_cpus",
+        "ray_worker_num_cpus",
+        "worker_num_threads",
         "max_episode_step",
         "minimum_buffer_size",
         "batch_size",
@@ -215,6 +218,9 @@ def parse_args():
     parser.add_argument("--sampled-auto-eval", action="store_true")
     parser.add_argument("--run-name", dest="run_name")
     parser.add_argument("--run-session", dest="run_session")
+    parser.add_argument("--ray-num-cpus", dest="ray_num_cpus", type=int)
+    parser.add_argument("--ray-worker-num-cpus", dest="ray_worker_num_cpus", type=int)
+    parser.add_argument("--worker-num-threads", dest="worker_num_threads", type=int)
     args = parser.parse_args()
 
     if args.resume_from is not None:

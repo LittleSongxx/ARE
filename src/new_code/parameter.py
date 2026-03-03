@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import os
+from datetime import datetime
 from pathlib import Path
 
 
 PACKAGE_ROOT = Path(__file__).resolve().parent
 BASELINE_ROOT = PACKAGE_ROOT.parent / "large-scale-DRL-exploration"
+RUN_SESSION_ENV_VAR = "NEW_CODE_RUN_SESSION"
 
 
 def _resolve_maps_dir() -> Path:
@@ -27,14 +29,117 @@ MAPS_DIR = _resolve_maps_dir()
 
 # saving path
 FOLDER_NAME = "ariadne1_ground_truth_critic"
-model_path = str(PACKAGE_ROOT / "model" / FOLDER_NAME)
-train_path = str(PACKAGE_ROOT / "train" / FOLDER_NAME)
-gifs_path = str(PACKAGE_ROOT / "gifs" / FOLDER_NAME)
-monitor_path = str(Path(train_path) / "monitor")
-eval_path = str(PACKAGE_ROOT / "eval" / FOLDER_NAME)
-checkpoint_path = str(Path(model_path) / "checkpoint.pth")
-checkpoint_final_path = str(Path(model_path) / "checkpoint_final.pth")
-checkpoint_interrupted_path = str(Path(model_path) / "checkpoint_interrupted.pth")
+MODEL_ROOT = PACKAGE_ROOT / "model" / FOLDER_NAME
+TRAIN_ROOT = PACKAGE_ROOT / "train" / FOLDER_NAME
+GIFS_ROOT = PACKAGE_ROOT / "gifs" / FOLDER_NAME
+EVAL_ROOT = PACKAGE_ROOT / "eval" / FOLDER_NAME
+
+
+def build_run_session() -> str:
+    return datetime.now().strftime("%Y_%m%d_%H%M")
+
+
+def get_run_session() -> str:
+    run_session = os.environ.get(RUN_SESSION_ENV_VAR)
+    if run_session:
+        return run_session
+    run_session = build_run_session()
+    os.environ[RUN_SESSION_ENV_VAR] = run_session
+    return run_session
+
+
+def _append_run_session(base_path: Path, run_session: str | None = None) -> Path:
+    return base_path / (run_session or get_run_session())
+
+
+def get_model_path(run_session: str | None = None) -> Path:
+    return _append_run_session(MODEL_ROOT, run_session)
+
+
+def get_train_path(run_session: str | None = None) -> Path:
+    return _append_run_session(TRAIN_ROOT, run_session)
+
+
+def get_gifs_path(run_session: str | None = None) -> Path:
+    return _append_run_session(GIFS_ROOT, run_session)
+
+
+def get_monitor_path(run_session: str | None = None) -> Path:
+    return get_train_path(run_session) / "monitor"
+
+
+def get_eval_path(run_session: str | None = None) -> Path:
+    return _append_run_session(EVAL_ROOT, run_session)
+
+
+def get_checkpoint_path(run_session: str | None = None) -> Path:
+    return get_model_path(run_session) / "checkpoint.pth"
+
+
+def get_checkpoint_final_path(run_session: str | None = None) -> Path:
+    return get_model_path(run_session) / "checkpoint_final.pth"
+
+
+def get_checkpoint_interrupted_path(run_session: str | None = None) -> Path:
+    return get_model_path(run_session) / "checkpoint_interrupted.pth"
+
+
+def iter_checkpoint_candidates(run_session: str | None = None) -> list[Path]:
+    if run_session is not None:
+        return [
+            get_checkpoint_interrupted_path(run_session),
+            get_checkpoint_final_path(run_session),
+            get_checkpoint_path(run_session),
+        ]
+
+    session_dirs = []
+    if MODEL_ROOT.exists():
+        session_dirs = sorted([path for path in MODEL_ROOT.iterdir() if path.is_dir()], key=lambda path: path.name, reverse=True)
+    candidates = []
+    for session_dir in session_dirs:
+        session = session_dir.name
+        candidates.extend(iter_checkpoint_candidates(session))
+    if not candidates:
+        candidates.extend(iter_checkpoint_candidates(get_run_session()))
+    return candidates
+
+
+def get_latest_checkpoint_path() -> Path:
+    for candidate in iter_checkpoint_candidates():
+        if candidate.exists():
+            return candidate
+    return get_checkpoint_path()
+
+
+def get_run_session_from_checkpoint(checkpoint_file: str | Path) -> str | None:
+    checkpoint_file = Path(checkpoint_file).resolve()
+    try:
+        relative = checkpoint_file.relative_to(MODEL_ROOT.resolve())
+    except ValueError:
+        return None
+    if not relative.parts:
+        return None
+    return relative.parts[0]
+
+
+def ensure_output_dirs(run_session: str | None = None) -> None:
+    get_model_path(run_session).mkdir(parents=True, exist_ok=True)
+    get_train_path(run_session).mkdir(parents=True, exist_ok=True)
+    get_gifs_path(run_session).mkdir(parents=True, exist_ok=True)
+    get_monitor_path(run_session).mkdir(parents=True, exist_ok=True)
+    get_eval_path(run_session).mkdir(parents=True, exist_ok=True)
+
+
+# Legacy path aliases for existing imports. These resolve against the current
+# NEW_CODE_RUN_SESSION environment variable.
+model_path = str(get_model_path())
+train_path = str(get_train_path())
+gifs_path = str(get_gifs_path())
+monitor_path = str(get_monitor_path())
+eval_path = str(get_eval_path())
+checkpoint_path = str(get_checkpoint_path())
+checkpoint_final_path = str(get_checkpoint_final_path())
+checkpoint_interrupted_path = str(get_checkpoint_interrupted_path())
 
 # save training data
 SUMMARY_WINDOW = 32

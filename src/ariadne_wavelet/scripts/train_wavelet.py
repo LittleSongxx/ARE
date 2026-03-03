@@ -48,6 +48,9 @@ def build_runtime_config(args):
     for field in (
         "max_episodes",
         "num_meta_agent",
+        "ray_num_cpus",
+        "ray_worker_num_cpus",
+        "worker_num_threads",
         "max_episode_step",
         "minimum_buffer_size",
         "batch_size",
@@ -87,6 +90,9 @@ def parse_args():
     parser.add_argument("--resume-from", dest="resume_from")
     parser.add_argument("--max-episodes", dest="max_episodes", type=int)
     parser.add_argument("--num-meta-agent", dest="num_meta_agent", type=int)
+    parser.add_argument("--ray-num-cpus", dest="ray_num_cpus", type=int)
+    parser.add_argument("--ray-worker-num-cpus", dest="ray_worker_num_cpus", type=int)
+    parser.add_argument("--worker-num-threads", dest="worker_num_threads", type=int)
     parser.add_argument("--max-episode-step", dest="max_episode_step", type=int)
     parser.add_argument("--minimum-buffer-size", dest="minimum_buffer_size", type=int)
     parser.add_argument("--batch-size", dest="batch_size", type=int)

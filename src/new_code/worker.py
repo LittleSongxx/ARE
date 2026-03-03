@@ -6,9 +6,6 @@ from utils import *
 from model import PolicyNet
 from ground_truth_node_manager import GroundTruthNodeManager
 
-if not os.path.exists(gifs_path):
-    os.makedirs(gifs_path)
-
 
 class Worker:
     def __init__(self, meta_agent_id, policy_net, global_step, device='cpu', save_image=False):
@@ -16,6 +13,8 @@ class Worker:
         self.global_step = global_step
         self.save_image = save_image
         self.device = device
+        self.gifs_path = str(get_gifs_path())
+        os.makedirs(self.gifs_path, exist_ok=True)
 
         self.env = Env(global_step, plot=self.save_image)
         self.robot = Agent(policy_net, self.device, self.save_image)
@@ -89,7 +88,7 @@ class Worker:
         # save gif
         if self.save_image:
             # 保存到以训练轮数为名的子目录
-            episode_gifs_path = os.path.join(gifs_path, f'episode_{self.global_step}')
+            episode_gifs_path = os.path.join(self.gifs_path, f'episode_{self.global_step}')
             if not os.path.exists(episode_gifs_path):
                 os.makedirs(episode_gifs_path)
             make_gif(episode_gifs_path, self.global_step, self.env.frame_files, self.env.explored_rate)

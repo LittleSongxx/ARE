@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import matplotlib.pyplot as plt
 import numpy as np
-from copy import deepcopy
+from copy import deepcopy  # kept for non-array uses
 from fnmatch import fnmatch
 from skimage import io
 from skimage.measure import block_reduce
@@ -124,7 +124,7 @@ class Env:
             self.robot_belief,
             self.ground_truth,
         )
-        self.old_belief = deepcopy(self.robot_belief)
+        self.old_belief = self.robot_belief.copy()
         self.belief_info = MapInfo(self.robot_belief, self.belief_origin_x, self.belief_origin_y, self.cell_size)
         self.ground_truth_info = MapInfo(
             self.ground_truth,
@@ -215,7 +215,7 @@ class Env:
             self.last_reward_components = {}
 
         self.global_frontiers = global_frontiers
-        self.old_belief = deepcopy(self.robot_belief)
+        self.old_belief = self.robot_belief.copy()
         return reward
 
     def apply_terminal_bonus(self, reward: float) -> float:

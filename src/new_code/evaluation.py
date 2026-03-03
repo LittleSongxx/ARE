@@ -9,7 +9,7 @@ from agent import Agent
 from env import Env
 from ground_truth_node_manager import GroundTruthNodeManager
 from model import PolicyNet
-from parameter import EMBEDDING_DIM, MAX_EPISODE_STEP, NODE_INPUT_DIM, eval_path
+from parameter import EMBEDDING_DIM, MAX_EPISODE_STEP, NODE_INPUT_DIM, get_eval_path
 from utils import make_gif
 
 
@@ -26,7 +26,7 @@ def evaluate_policy(
     device: str | torch.device = "cpu",
     max_episode_step: int = MAX_EPISODE_STEP,
 ):
-    eval_root = Path(output_dir or eval_path)
+    eval_root = Path(output_dir or get_eval_path())
     eval_root.mkdir(parents=True, exist_ok=True)
     eval_device = torch.device(device)
 

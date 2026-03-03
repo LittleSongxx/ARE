@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import matplotlib.pyplot as plt
 import numpy as np
-from copy import deepcopy
+from copy import deepcopy  # kept for non-array uses
 from skimage import io
 from skimage.measure import block_reduce
 
@@ -13,11 +13,21 @@ from .sensor import sensor_work
 from .utils import MapInfo, get_frontier_in_map
 
 
+def list_map_files(map_dir: str | Path) -> list[Path]:
+    directory = Path(map_dir)
+    if not directory.exists():
+        raise FileNotFoundError(
+            f"MAPS_DIR does not exist: {directory}. "
+            "Place training maps under ariadne_wavelet/maps or set ARIADNE_MAPS_DIR."
+        )
+    return sorted(path for path in directory.iterdir() if path.is_file())
+
+
 class Env:
-    def __init__(self, episode_index, plot=False, output_dir=None, artifact_stem=None):
+    def __init__(self, episode_index, plot=False, output_dir=None, artifact_stem=None, forced_map_path=None):
         self.episode_index = episode_index
         self.plot = plot
-        self.ground_truth, self.robot_cell = self.import_ground_truth(episode_index)
+        self.ground_truth, self.robot_cell = self.import_ground_truth(episode_index, forced_map_path=forced_map_path)
         self.ground_truth_size = np.shape(self.ground_truth)
         self.cell_size = CELL_SIZE
 
@@ -37,7 +47,7 @@ class Env:
             self.robot_belief,
             self.ground_truth,
         )
-        self.old_belief = deepcopy(self.robot_belief)
+        self.old_belief = self.robot_belief.copy()
         self.belief_info = MapInfo(self.robot_belief, self.belief_origin_x, self.belief_origin_y, self.cell_size)
         self.ground_truth_info = MapInfo(
             self.ground_truth,
@@ -53,20 +63,26 @@ class Env:
             self.trajectory_x = [self.robot_location[0]]
             self.trajectory_y = [self.robot_location[1]]
 
-    def import_ground_truth(self, episode_index):
-        if not MAPS_DIR.exists():
-            raise FileNotFoundError(
-                f"MAPS_DIR does not exist: {MAPS_DIR}. "
-                "Place training maps under ariadne_wavelet/maps or set ARIADNE_MAPS_DIR."
-            )
-        map_list = sorted(path.name for path in MAPS_DIR.iterdir() if path.is_file())
-        if not map_list:
-            raise FileNotFoundError(
-                f"No map files found in MAPS_DIR: {MAPS_DIR}. "
-                "Place training maps under ariadne_wavelet/maps or set ARIADNE_MAPS_DIR."
-            )
-        map_index = episode_index % len(map_list)
-        ground_truth = (io.imread(MAPS_DIR / map_list[map_index], as_gray=True) * 255).astype(int)
+    def import_ground_truth(self, episode_index, forced_map_path=None):
+        if forced_map_path is not None:
+            map_path = Path(forced_map_path)
+            if not map_path.is_file():
+                raise FileNotFoundError(f"Forced map path does not exist: {map_path}")
+        else:
+            if not MAPS_DIR.exists():
+                raise FileNotFoundError(
+                    f"MAPS_DIR does not exist: {MAPS_DIR}. "
+                    "Place training maps under ariadne_wavelet/maps or set ARIADNE_MAPS_DIR."
+                )
+            map_list = sorted(path.name for path in MAPS_DIR.iterdir() if path.is_file())
+            if not map_list:
+                raise FileNotFoundError(
+                    f"No map files found in MAPS_DIR: {MAPS_DIR}. "
+                    "Place training maps under ariadne_wavelet/maps or set ARIADNE_MAPS_DIR."
+                )
+            map_index = episode_index % len(map_list)
+            map_path = MAPS_DIR / map_list[map_index]
+        ground_truth = (io.imread(map_path, as_gray=True) * 255).astype(int)
         ground_truth = block_reduce(ground_truth, 2, np.min)
 
         robot_cell = np.nonzero(ground_truth == 208)
@@ -108,7 +124,7 @@ class Env:
 
         reward += delta_num / (SENSOR_RANGE * 3.14 // FRONTIER_CELL_SIZE)
         self.global_frontiers = global_frontiers
-        self.old_belief = deepcopy(self.robot_belief)
+        self.old_belief = self.robot_belief.copy()
         return reward
 
     def evaluate_exploration_rate(self):

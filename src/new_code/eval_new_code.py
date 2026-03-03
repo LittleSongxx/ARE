@@ -12,14 +12,11 @@ if str(SCRIPT_ROOT) not in sys.path:
     sys.path.insert(0, str(SCRIPT_ROOT))
 
 from evaluation import evaluate_policy, summarize_eval_results
-from parameter import MAX_EPISODE_STEP, checkpoint_final_path, checkpoint_interrupted_path, checkpoint_path, eval_path
+from parameter import MAX_EPISODE_STEP, get_eval_path, get_latest_checkpoint_path, get_run_session_from_checkpoint
 
 
 def get_default_checkpoint():
-    for candidate in (checkpoint_interrupted_path, checkpoint_final_path, checkpoint_path):
-        if Path(candidate).exists():
-            return candidate
-    return checkpoint_path
+    return str(get_latest_checkpoint_path())
 
 
 def parse_args():
@@ -31,16 +28,18 @@ def parse_args():
     parser.add_argument("--sampled", action="store_true")
     parser.add_argument("--device", choices=("cpu", "cuda"), default="cpu")
     parser.add_argument("--max-episode-step", type=int, default=MAX_EPISODE_STEP)
-    parser.add_argument("--output-dir", default=eval_path)
+    parser.add_argument("--output-dir")
     return parser.parse_args()
 
 
 def main():
     args = parse_args()
     checkpoint = torch.load(args.checkpoint, map_location=args.device, weights_only=False)
+    run_session = get_run_session_from_checkpoint(args.checkpoint)
+    output_dir = args.output_dir or str(get_eval_path(run_session))
     results = evaluate_policy(
         checkpoint["policy_model"],
-        output_dir=args.output_dir,
+        output_dir=output_dir,
         episodes=args.episodes,
         start_episode=args.start_episode,
         greedy=not args.sampled,

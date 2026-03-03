@@ -185,28 +185,26 @@ def is_free(location, map_info):
     return map_info.map[cell[1], cell[0]] == FREE
 
 
-def check_collision(start, end, map_info):
-    start_cell = get_cell_position_from_coords(start, map_info)
-    end_cell = get_cell_position_from_coords(end, map_info)
-    grid = map_info.map
+import numba as nb
 
-    x0 = start_cell[0]
-    y0 = start_cell[1]
-    x1 = end_cell[0]
-    y1 = end_cell[1]
-    dx, dy = abs(x1 - x0), abs(y1 - y0)
+
+@nb.njit(cache=True)
+def _bresenham_collision(x0, y0, x1, y1, grid, occupied, unknown):
+    """Return True if the Bresenham line hits an OCCUPIED or UNKNOWN cell."""
+    dx = abs(x1 - x0)
+    dy = abs(y1 - y0)
     x, y = x0, y0
     error = dx - dy
     x_inc = 1 if x1 > x0 else -1
     y_inc = 1 if y1 > y0 else -1
     dx *= 2
     dy *= 2
-
-    while 0 <= x < grid.shape[1] and 0 <= y < grid.shape[0]:
-        cell_value = grid[int(y), int(x)]
+    h, w = grid.shape[0], grid.shape[1]
+    while 0 <= x < w and 0 <= y < h:
+        cv = grid[y, x]
         if x == x1 and y == y1:
             break
-        if cell_value == OCCUPIED or cell_value == UNKNOWN:
+        if cv == occupied or cv == unknown:
             return True
         if error > 0:
             x += x_inc
@@ -217,38 +215,55 @@ def check_collision(start, end, map_info):
     return False
 
 
-def check_collision_type(start, end, map_info):
-    start_cell = get_cell_position_from_coords(start, map_info)
-    end_cell = get_cell_position_from_coords(end, map_info)
-    grid = map_info.map.astype(np.int32)
-
-    x0 = start_cell[0]
-    y0 = start_cell[1]
-    x1 = end_cell[0]
-    y1 = end_cell[1]
-    dx, dy = abs(x1 - x0), abs(y1 - y0)
+@nb.njit(cache=True)
+def _bresenham_collision_type(x0, y0, x1, y1, grid, occupied, unknown, free):
+    """Return the first collision cell type, or FREE if none."""
+    dx = abs(x1 - x0)
+    dy = abs(y1 - y0)
     x, y = x0, y0
     error = dx - dy
     x_inc = 1 if x1 > x0 else -1
     y_inc = 1 if y1 > y0 else -1
     dx *= 2
     dy *= 2
-
-    while 0 <= x < grid.shape[1] and 0 <= y < grid.shape[0]:
-        cell_value = grid[int(y), int(x)]
+    h, w = grid.shape[0], grid.shape[1]
+    while 0 <= x < w and 0 <= y < h:
+        cv = grid[y, x]
         if x == x1 and y == y1:
             break
-        if cell_value == OCCUPIED:
-            return OCCUPIED
-        if cell_value == UNKNOWN:
-            return UNKNOWN
+        if cv == occupied:
+            return occupied
+        if cv == unknown:
+            return unknown
         if error > 0:
             x += x_inc
             error -= dy
         else:
             y += y_inc
             error += dx
-    return FREE
+    return free
+
+
+def check_collision(start, end, map_info):
+    start_cell = get_cell_position_from_coords(start, map_info)
+    end_cell = get_cell_position_from_coords(end, map_info)
+    grid = map_info.map
+    return _bresenham_collision(
+        int(start_cell[0]), int(start_cell[1]),
+        int(end_cell[0]), int(end_cell[1]),
+        grid, OCCUPIED, UNKNOWN,
+    )
+
+
+def check_collision_type(start, end, map_info):
+    start_cell = get_cell_position_from_coords(start, map_info)
+    end_cell = get_cell_position_from_coords(end, map_info)
+    grid = map_info.map.astype(np.int32)
+    return _bresenham_collision_type(
+        int(start_cell[0]), int(start_cell[1]),
+        int(end_cell[0]), int(end_cell[1]),
+        grid, OCCUPIED, UNKNOWN, FREE,
+    )
 
 
 def make_gif(path, n, frame_files, rate, cleanup=True):

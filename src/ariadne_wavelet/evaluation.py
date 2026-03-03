@@ -7,16 +7,18 @@ import numpy as np
 import torch
 
 from .agent import InferenceAgent
-from .env import Env
+from .env import Env, list_map_files
 from .model import PolicyNet
 from .parameter import (
     CLUSTER_RANGE,
     EMBEDDING_DIM,
+    MAPS_DIR,
     MAX_EPISODE_STEP,
     NODE_INPUT_DIM,
     RuntimeConfig,
     ensure_result_dirs,
     get_gifs_path,
+    get_result_eval_path,
 )
 from .utils import (
     build_artifact_stem,
@@ -28,6 +30,21 @@ from .utils import (
 
 def _copy_state_dict_to_device(state_dict, device):
     return {key: value.detach().to(device) for key, value in state_dict.items()}
+
+
+def resolve_benchmark_eval_maps(output_config: RuntimeConfig) -> list[Path]:
+    map_files = list_map_files(MAPS_DIR)
+    benchmark_names = tuple(name for name in output_config.eval_benchmark_maps if str(name).strip())
+    if benchmark_names:
+        available = {path.name: path for path in map_files}
+        missing = [name for name in benchmark_names if name not in available]
+        if missing:
+            raise FileNotFoundError(
+                "Benchmark eval maps not found in ariadne_wavelet/maps: "
+                + ", ".join(missing)
+            )
+        return [available[name] for name in benchmark_names]
+    return map_files[:1]
 
 
 def save_evaluation_metrics_plot(results: list[dict[str, object]], output_dir: str | Path) -> Path:
@@ -156,8 +173,9 @@ def evaluate_policy(
 ):
     output_config = output_config or RuntimeConfig()
     ensure_result_dirs(output_config)
-    eval_gifs_path = get_gifs_path(output_config)
+    eval_gifs_path = get_result_eval_path(output_config)
     eval_device = torch.device(device)
+    benchmark_maps = resolve_benchmark_eval_maps(output_config) if output_config.use_fixed_eval_maps else None
 
     policy_net = PolicyNet(NODE_INPUT_DIM, EMBEDDING_DIM).to(eval_device)
     policy_net.load_state_dict(_copy_state_dict_to_device(policy_state_dict, eval_device))
@@ -168,7 +186,10 @@ def evaluate_policy(
         episode_id = start_episode + episode_offset
         artifact_stem = build_artifact_stem(episode_id, prefix="eval_episode")
         output_dir = ensure_bucket_dir(eval_gifs_path, episode_id, result_bucket_episodes)
-        env = Env(episode_id, plot=False)
+        forced_map_path = None
+        if benchmark_maps:
+            forced_map_path = benchmark_maps[episode_offset % len(benchmark_maps)]
+        env = Env(episode_id, plot=False, forced_map_path=forced_map_path)
         agent = InferenceAgent(policy_net, device=eval_device, plot=False)
         trajectory = [env.robot_location.copy()]
         frame_files = []

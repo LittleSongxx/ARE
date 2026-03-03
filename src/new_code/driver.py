@@ -41,8 +41,8 @@ def _save_checkpoint(path, checkpoint):
 
 
 def _load_checkpoint(device):
-    for candidate in (checkpoint_interrupted_path, checkpoint_final_path, checkpoint_path):
-        if os.path.exists(candidate):
+    for candidate in iter_checkpoint_candidates():
+        if candidate.exists():
             checkpoint = torch.load(candidate, map_location=device, weights_only=False)
             return candidate, checkpoint
     return None, None
@@ -94,19 +94,47 @@ def _write_eval_to_tensorboard(writer, eval_summary, curr_episode):
 
 
 def main():
-    os.makedirs(model_path, exist_ok=True)
-    os.makedirs(train_path, exist_ok=True)
-    os.makedirs(gifs_path, exist_ok=True)
-    os.makedirs(eval_path, exist_ok=True)
+    run_session = get_run_session()
+    ensure_output_dirs(run_session)
+    current_model_path = get_model_path(run_session)
+    current_train_path = get_train_path(run_session)
+    current_gifs_path = get_gifs_path(run_session)
+    current_eval_path = get_eval_path(run_session)
+    current_monitor_path = get_monitor_path(run_session)
+    current_checkpoint_path = get_checkpoint_path(run_session)
+    current_checkpoint_final_path = get_checkpoint_final_path(run_session)
+    current_checkpoint_interrupted_path = get_checkpoint_interrupted_path(run_session)
 
     if USE_GPU and NUM_GPU > 0:
-        ray.init(ignore_reinit_error=True, num_gpus=NUM_GPU)
+        ray.init(
+            ignore_reinit_error=True,
+            num_gpus=NUM_GPU,
+            runtime_env={"env_vars": {RUN_SESSION_ENV_VAR: run_session}},
+        )
     else:
-        ray.init(ignore_reinit_error=True)
-    print(f"Welcome to RL autonomous exploration! worker_gpus={NUM_GPU} learner_device={'cuda' if USE_GPU_GLOBAL else 'cpu'}")
+        ray.init(
+            ignore_reinit_error=True,
+            runtime_env={"env_vars": {RUN_SESSION_ENV_VAR: run_session}},
+        )
+    print(
+        f"Welcome to RL autonomous exploration! "
+        f"run_session={run_session} "
+        f"worker_gpus={NUM_GPU} "
+        f"learner_device={'cuda' if USE_GPU_GLOBAL else 'cpu'}"
+    )
+    print(
+        f"save_dirs model={current_model_path} "
+        f"train={current_train_path} "
+        f"gifs={current_gifs_path} "
+        f"eval={current_eval_path}"
+    )
 
-    writer = SummaryWriter(train_path)
-    monitor = TrainingMonitor(save_dir=monitor_path, window_size=MONITOR_WINDOW, snapshot_interval=MONITOR_SNAPSHOT_INTERVAL)
+    writer = SummaryWriter(str(current_train_path))
+    monitor = TrainingMonitor(
+        save_dir=str(current_monitor_path),
+        window_size=MONITOR_WINDOW,
+        snapshot_interval=MONITOR_SNAPSHOT_INTERVAL,
+    )
 
     device = torch.device("cuda") if USE_GPU_GLOBAL and torch.cuda.is_available() else torch.device("cpu")
     local_device = torch.device("cuda") if USE_GPU and torch.cuda.is_available() else torch.device("cpu")
@@ -364,9 +392,9 @@ def main():
             log_alpha_optimizer,
             curr_episode,
         )
-        _save_checkpoint(checkpoint_path, final_checkpoint)
-        _save_checkpoint(checkpoint_final_path, final_checkpoint)
-        print(f"Final model saved to {checkpoint_final_path}")
+        _save_checkpoint(current_checkpoint_path, final_checkpoint)
+        _save_checkpoint(current_checkpoint_final_path, final_checkpoint)
+        print(f"Final model saved to {current_checkpoint_final_path}")
     except KeyboardInterrupt:
         interrupted_checkpoint = _build_checkpoint(
             global_policy_net,
@@ -379,8 +407,8 @@ def main():
             log_alpha_optimizer,
             curr_episode,
         )
-        _save_checkpoint(checkpoint_interrupted_path, interrupted_checkpoint)
-        print(f"Interrupted model saved to {checkpoint_interrupted_path}")
+        _save_checkpoint(current_checkpoint_interrupted_path, interrupted_checkpoint)
+        print(f"Interrupted model saved to {current_checkpoint_interrupted_path}")
     finally:
         writer.close()
         for actor in meta_agents:
