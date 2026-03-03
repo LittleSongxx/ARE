@@ -167,6 +167,13 @@ class ArtifactLayoutTests(unittest.TestCase):
         self.assertEqual(config.num_gpu, baseline.num_gpu)
         self.assertEqual(config.run_name, SMOKE_FOLDER_NAME)
 
+    def test_train_parse_args_applies_gif_frame_rate(self):
+        with patch.object(sys, "argv", ["train_wavelet.py", "--gif-frame-rate", "0.8"]):
+            args = parse_args()
+        config = build_runtime_config(args)
+
+        self.assertAlmostEqual(config.gif_frame_rate, 0.8)
+
 
 if __name__ == "__main__":
     unittest.main()

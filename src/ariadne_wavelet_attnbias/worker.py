@@ -176,7 +176,12 @@ class Worker:
             self.perf_metrics["curriculum_level_index"] = int(self.env.curriculum_level_index)
 
         if self.save_image:
-            finalize_episode_artifacts(self.output_dir, self.episode_artifact_stem, self.env.frame_files)
+            finalize_episode_artifacts(
+                self.output_dir,
+                self.episode_artifact_stem,
+                self.env.frame_files,
+                frame_rate=self.runtime_config.gif_frame_rate,
+            )
 
     def save_observation(self, observation, ground_truth_observation):
         node_inputs, node_padding_mask, edge_mask, current_index, current_edge, edge_padding_mask = observation

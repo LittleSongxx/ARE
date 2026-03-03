@@ -39,13 +39,16 @@ def parse_args():
     parser.add_argument("--device", choices=("cpu", "cuda"), default="cpu")
     parser.add_argument("--result-bucket-episodes", type=int, default=100)
     parser.add_argument("--max-episode-step", type=int, default=MAX_EPISODE_STEP)
+    parser.add_argument("--gif-frame-rate", type=float)
     return parser.parse_args()
 
 
 def main():
     args = parse_args()
     run_name, run_session = get_run_identity_from_checkpoint(args.checkpoint)
-    output_config = RuntimeConfig(run_name=run_name, run_session=run_session)
+    output_config = RuntimeConfig(run_name=run_name, run_session=run_session).with_overrides(
+        gif_frame_rate=args.gif_frame_rate if args.gif_frame_rate is not None else RuntimeConfig().gif_frame_rate,
+    )
     ensure_result_dirs(output_config)
 
     checkpoint = torch.load(args.checkpoint, map_location=args.device, weights_only=False)

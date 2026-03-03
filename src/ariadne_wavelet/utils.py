@@ -184,11 +184,13 @@ def is_free(location, map_info):
     return map_info.map[cell[1], cell[0]] == FREE
 
 
-import numba as nb
+try:
+    import numba as nb
+except ImportError:  # pragma: no cover - exercised in ros_conda runtime
+    nb = None
 
 
-@nb.njit(cache=True)
-def _bresenham_collision(x0, y0, x1, y1, grid, occupied, unknown):
+def _bresenham_collision_py(x0, y0, x1, y1, grid, occupied, unknown):
     """Return True if the Bresenham line hits an OCCUPIED or UNKNOWN cell."""
     dx = abs(x1 - x0)
     dy = abs(y1 - y0)
@@ -214,8 +216,7 @@ def _bresenham_collision(x0, y0, x1, y1, grid, occupied, unknown):
     return False
 
 
-@nb.njit(cache=True)
-def _bresenham_collision_type(x0, y0, x1, y1, grid, occupied, unknown, free):
+def _bresenham_collision_type_py(x0, y0, x1, y1, grid, occupied, unknown, free):
     """Return the first collision cell type, or FREE if none."""
     dx = abs(x1 - x0)
     dy = abs(y1 - y0)
@@ -241,6 +242,14 @@ def _bresenham_collision_type(x0, y0, x1, y1, grid, occupied, unknown, free):
             y += y_inc
             error += dx
     return free
+
+
+if nb is not None:  # pragma: no branch - small runtime dispatch
+    _bresenham_collision = nb.njit(cache=True)(_bresenham_collision_py)
+    _bresenham_collision_type = nb.njit(cache=True)(_bresenham_collision_type_py)
+else:  # pragma: no cover - exercised in environments without numba
+    _bresenham_collision = _bresenham_collision_py
+    _bresenham_collision_type = _bresenham_collision_type_py
 
 
 def check_collision(start, end, map_info):

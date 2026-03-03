@@ -124,7 +124,12 @@ class Worker:
         self.perf_metrics["episode_steps"] = self.episode_steps
 
         if self.save_image:
-            finalize_episode_artifacts(self.output_dir, self.episode_artifact_stem, self.env.frame_files)
+            finalize_episode_artifacts(
+                self.output_dir,
+                self.episode_artifact_stem,
+                self.env.frame_files,
+                frame_rate=self.runtime_config.gif_frame_rate,
+            )
 
     def _append_optional_bias(self, slot_index, attn_bias):
         buffered = self._buffer_tensor(attn_bias)

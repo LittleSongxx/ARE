@@ -96,6 +96,7 @@ def parse_args():
     parser.add_argument("--device", choices=("cpu", "cuda"), default="cpu")
     parser.add_argument("--result-bucket-episodes", type=int, default=100)
     parser.add_argument("--max-episode-step", type=int, default=MAX_EPISODE_STEP)
+    parser.add_argument("--gif-frame-rate", type=float)
     parser.add_argument("--disable-attention-bias", action="store_true")
     parser.add_argument("--attn-bias-mode", choices=("diff", "open", "hybrid"))
     parser.add_argument("--attn-bias-beta", type=float)
@@ -133,6 +134,8 @@ def main():
 
     run_name, run_session = get_run_identity_from_checkpoint(args.checkpoint)
     runtime_overrides = {}
+    if args.gif_frame_rate is not None:
+        runtime_overrides["gif_frame_rate"] = args.gif_frame_rate
     if args.disable_fixed_eval_maps:
         runtime_overrides["use_fixed_eval_maps"] = False
     if args.eval_benchmark_map:

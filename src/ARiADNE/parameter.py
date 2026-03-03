@@ -52,6 +52,7 @@ EVAL_BENCHMARK_MAPS = (
 SUMMARY_WINDOW = 32
 LOAD_MODEL = False
 SAVE_IMG_GAP = 100
+GIF_FRAME_RATE = 0.3
 
 
 # map and planning resolution
@@ -222,6 +223,7 @@ class RuntimeConfig:
     batch_size: int = BATCH_SIZE
     replay_size: int = REPLAY_SIZE
     save_img_gap: int = SAVE_IMG_GAP
+    gif_frame_rate: float = GIF_FRAME_RATE
     summary_window: int = SUMMARY_WINDOW
     train_updates_per_iter: int = TRAIN_UPDATES_PER_ITER
     result_bucket_episodes: int = RESULT_BUCKET_EPISODES
@@ -279,6 +281,7 @@ class RuntimeConfig:
         object.__setattr__(self, "batch_size", max(int(self.batch_size), 1))
         object.__setattr__(self, "replay_size", max(int(self.replay_size), 1))
         object.__setattr__(self, "save_img_gap", max(int(self.save_img_gap), 1))
+        object.__setattr__(self, "gif_frame_rate", max(float(self.gif_frame_rate), 1e-3))
         object.__setattr__(self, "summary_window", max(int(self.summary_window), 1))
         object.__setattr__(self, "train_updates_per_iter", max(int(self.train_updates_per_iter), 1))
         object.__setattr__(self, "result_bucket_episodes", max(int(self.result_bucket_episodes), 1))

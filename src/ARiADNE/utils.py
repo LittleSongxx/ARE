@@ -55,6 +55,22 @@ class MapInfo:
         self.map_origin_y = map_origin_y
 
 
+def get_numba_runtime_status():
+    try:
+        from . import sensor as sensor_module
+    except Exception:  # pragma: no cover - defensive import
+        sensor_module = None
+
+    sensor_numba = getattr(sensor_module, "nb", None) if sensor_module is not None else None
+    active_numba = _numba if _numba is not None else sensor_numba
+    return {
+        "installed": active_numba is not None,
+        "version": getattr(active_numba, "__version__", None) if active_numba is not None else None,
+        "sensor_enabled": sensor_numba is not None,
+        "collision_enabled": _numba is not None,
+    }
+
+
 def get_cell_position_from_coords(coords, map_info, check_negative=True):
     single_cell = False
     if coords.flatten().shape[0] == 2:

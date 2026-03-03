@@ -1,11 +1,14 @@
 import math
 
 import numpy as np
-import numba as nb
+
+try:
+    import numba as nb
+except ImportError:  # pragma: no cover - exercised in ros_conda runtime
+    nb = None
 
 
-@nb.njit(cache=True)
-def _collision_check_jit(x0, y0, x1, y1, ground_truth, robot_belief):
+def _collision_check_impl(x0, y0, x1, y1, ground_truth, robot_belief):
     """Bresenham ray-cast: update *robot_belief* in-place along the ray."""
     x0 = round(x0)
     y0 = round(y0)
@@ -48,17 +51,24 @@ def _collision_check_jit(x0, y0, x1, y1, ground_truth, robot_belief):
             error += dx
 
 
-@nb.njit(cache=True)
-def _sensor_work_jit(x0, y0, sensor_range, robot_belief, ground_truth):
-    """Cast 720 rays (0.5° increment) from the robot position."""
+def _sensor_work_impl(x0, y0, sensor_range, robot_belief, ground_truth):
+    """Cast 720 rays (0.5 degree increment) from the robot position."""
     sensor_angle_inc = 0.5 / 180.0 * math.pi
     two_pi = 2.0 * math.pi
     sensor_angle = 0.0
     while sensor_angle < two_pi:
         x1 = x0 + math.cos(sensor_angle) * sensor_range
         y1 = y0 + math.sin(sensor_angle) * sensor_range
-        _collision_check_jit(x0, y0, x1, y1, ground_truth, robot_belief)
+        _collision_check_impl(x0, y0, x1, y1, ground_truth, robot_belief)
         sensor_angle += sensor_angle_inc
+
+
+if nb is not None:
+    _collision_check_jit = nb.njit(cache=True)(_collision_check_impl)
+    _sensor_work_jit = nb.njit(cache=True)(_sensor_work_impl)
+else:
+    _collision_check_jit = _collision_check_impl
+    _sensor_work_jit = _sensor_work_impl
 
 
 def collision_check(x0, y0, x1, y1, ground_truth, robot_belief):

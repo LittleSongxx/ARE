@@ -50,7 +50,7 @@ if __package__ in (None, ""):
     from ARiADNE.runtime_utils import resolve_ray_num_cpus, resolve_ray_worker_num_cpus, resolve_worker_num_threads
     from ARiADNE.training_monitor import TrainingMonitor
     from ARiADNE.runner import Runner
-    from ARiADNE.utils import ensure_bucket_dir, get_bucket_name
+    from ARiADNE.utils import ensure_bucket_dir, get_bucket_name, get_numba_runtime_status
 else:
     from .evaluation import evaluate_policy, summarize_eval_results
     from .model import PolicyNet, QNet
@@ -81,7 +81,7 @@ else:
     from .runtime_utils import resolve_ray_num_cpus, resolve_ray_worker_num_cpus, resolve_worker_num_threads
     from .training_monitor import TrainingMonitor
     from .runner import Runner
-    from .utils import ensure_bucket_dir, get_bucket_name
+    from .utils import ensure_bucket_dir, get_bucket_name, get_numba_runtime_status
 
 
 # ── interrupt handling ──────────────────────────────────────────────────────────
@@ -469,6 +469,14 @@ def main(runtime_config: RuntimeConfig | None = None) -> dict:
         f"minimum_buffer_size={runtime_config.minimum_buffer_size} "
         f"batch_size={runtime_config.batch_size} "
         f"train_updates_per_iter={runtime_config.train_updates_per_iter}"
+    )
+    numba_status = get_numba_runtime_status()
+    print(
+        "numba_runtime "
+        f"installed={int(bool(numba_status['installed']))} "
+        f"version={numba_status['version'] or '<none>'} "
+        f"sensor_accel={int(bool(numba_status['sensor_enabled']))} "
+        f"collision_accel={int(bool(numba_status['collision_enabled']))}"
     )
 
     # ── install signal handlers ─────────────────────────────────────────────

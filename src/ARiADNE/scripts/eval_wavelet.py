@@ -40,6 +40,7 @@ def parse_args():
     parser.add_argument("--device", choices=("cpu", "cuda"), default="cpu")
     parser.add_argument("--result-bucket-episodes", type=int, default=100)
     parser.add_argument("--max-episode-step", type=int, default=MAX_EPISODE_STEP)
+    parser.add_argument("--gif-frame-rate", type=float)
     parser.add_argument("--wavelet-skip-utility-updates", action="store_true")
     parser.add_argument("--wavelet-guided-node-sampling", action="store_true")
     parser.add_argument("--wavelet-adaptive-dth", action="store_true")
@@ -55,6 +56,7 @@ def main():
         RuntimeConfig(run_name=run_name, run_session=run_session),
     )
     output_config = output_config.with_overrides(
+        gif_frame_rate=args.gif_frame_rate if args.gif_frame_rate is not None else output_config.gif_frame_rate,
         wavelet_skip_utility_updates=True if args.wavelet_skip_utility_updates else output_config.wavelet_skip_utility_updates,
         wavelet_guided_node_sampling=True if args.wavelet_guided_node_sampling else output_config.wavelet_guided_node_sampling,
         wavelet_adaptive_dth=True if args.wavelet_adaptive_dth else output_config.wavelet_adaptive_dth,

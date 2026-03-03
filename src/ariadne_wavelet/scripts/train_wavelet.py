@@ -56,6 +56,7 @@ def build_runtime_config(args):
         "batch_size",
         "replay_size",
         "save_img_gap",
+        "gif_frame_rate",
         "summary_window",
         "train_updates_per_iter",
         "result_bucket_episodes",
@@ -98,6 +99,7 @@ def parse_args():
     parser.add_argument("--batch-size", dest="batch_size", type=int)
     parser.add_argument("--replay-size", dest="replay_size", type=int)
     parser.add_argument("--save-img-gap", dest="save_img_gap", type=int)
+    parser.add_argument("--gif-frame-rate", dest="gif_frame_rate", type=float)
     parser.add_argument("--summary-window", dest="summary_window", type=int)
     parser.add_argument("--train-updates-per-iter", dest="train_updates_per_iter", type=int)
     parser.add_argument("--result-bucket-episodes", dest="result_bucket_episodes", type=int)

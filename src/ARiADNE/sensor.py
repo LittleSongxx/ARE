@@ -65,7 +65,19 @@ def _sensor_work_impl(x0, y0, sensor_range, robot_belief, ground_truth):
 
 if nb is not None:
     _collision_check_jit = nb.njit(cache=True)(_collision_check_impl)
-    _sensor_work_jit = nb.njit(cache=True)(_sensor_work_impl)
+
+    def _sensor_work_numba_impl(x0, y0, sensor_range, robot_belief, ground_truth):
+        """Numba path must call the compiled collision kernel, not the Python one."""
+        sensor_angle_inc = 0.5 / 180.0 * math.pi
+        two_pi = 2.0 * math.pi
+        sensor_angle = 0.0
+        while sensor_angle < two_pi:
+            x1 = x0 + math.cos(sensor_angle) * sensor_range
+            y1 = y0 + math.sin(sensor_angle) * sensor_range
+            _collision_check_jit(x0, y0, x1, y1, ground_truth, robot_belief)
+            sensor_angle += sensor_angle_inc
+
+    _sensor_work_jit = nb.njit(cache=True)(_sensor_work_numba_impl)
 else:
     _collision_check_jit = _collision_check_impl
     _sensor_work_jit = _sensor_work_impl

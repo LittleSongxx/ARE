@@ -224,7 +224,12 @@ def evaluate_policy(
             if success:
                 break
 
-        gif_path, png_path = finalize_episode_artifacts(output_dir, artifact_stem, frame_files)
+        gif_path, png_path = finalize_episode_artifacts(
+            output_dir,
+            artifact_stem,
+            frame_files,
+            frame_rate=output_config.gif_frame_rate,
+        )
         results.append(
             {
                 "episode": episode_id,

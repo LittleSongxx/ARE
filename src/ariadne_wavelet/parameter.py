@@ -57,6 +57,7 @@ LOAD_MODEL = False
 # Active default for the offline 3 x A40 server:
 # reduce PNG/GIF/eval frequency to avoid unnecessary I/O while long training runs.
 SAVE_IMG_GAP = 100
+GIF_FRAME_RATE = 1.0
 
 
 # map and planning resolution
@@ -151,6 +152,7 @@ class RuntimeConfig:
     batch_size: int = BATCH_SIZE
     replay_size: int = REPLAY_SIZE
     save_img_gap: int = SAVE_IMG_GAP
+    gif_frame_rate: float = GIF_FRAME_RATE
     summary_window: int = SUMMARY_WINDOW
     train_updates_per_iter: int = TRAIN_UPDATES_PER_ITER
     result_bucket_episodes: int = RESULT_BUCKET_EPISODES
@@ -170,6 +172,9 @@ class RuntimeConfig:
     eval_benchmark_maps: tuple[str, ...] = tuple(EVAL_BENCHMARK_MAPS)
     run_name: str = FOLDER_NAME
     run_session: str | None = None
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "gif_frame_rate", max(float(self.gif_frame_rate), 1e-3))
 
     def with_overrides(self, **kwargs: object) -> "RuntimeConfig":
         return replace(self, **kwargs)
