@@ -93,6 +93,37 @@ GAMMA = 1
 NUM_META_AGENT = 40
 TRAIN_UPDATES_PER_ITER = 10
 
+# RL optimization parameters
+ENABLE_NSTEP = True
+N_STEP = 1
+ENABLE_PER = True
+PER_ALPHA = 0.6
+PER_BETA0 = 0.4
+PER_BETA_STEPS = 100000
+PER_EPS = 1e-6
+ENABLE_ADAPTIVE_ENTROPY_TARGET = True
+ENTROPY_TARGET_SCALE = 0.05
+ENABLE_SOFT_TARGET_UPDATE = True
+TAU = 0.0
+POLICY_DELAY = 1
+REPLAY_RATIO = 0.0
+ENABLE_REWARD_DECOMPOSITION = True
+REWARD_INFO_WEIGHT = 1.0
+REWARD_DIST_WEIGHT = 1.0
+REWARD_SAFE_WEIGHT = 0.0
+REWARD_TERMINAL_BONUS = 20.0
+ENABLE_CURRICULUM = True
+# 两档 coarse curriculum:
+# - 0~5999: 纯 easy
+# - 6000~8999: easy/hard 混采过渡
+# - 9000+: 纯 hard
+CURRICULUM_MILESTONES = (0, 6000)
+CURRICULUM_LEVELS = ("easy", "hard")
+CURRICULUM_SOURCE = None
+# 进入新难度阶段后的混采窗口长度；0 表示直接硬切换。
+CURRICULUM_MIX_WINDOW = 3000
+USE_CURRICULUM_IN_EVAL = False
+
 
 # network parameters
 BASE_NODE_INPUT_DIM = 4
@@ -149,6 +180,8 @@ WAVELET_ATTN_BIAS_TYPE = "sim_exp"
 WAVELET_ATTN_BIAS_BETA = 0.5
 # 高斯相似度里的 sigma，越小越强调局部差异。
 WAVELET_ATTN_BIAS_SIGMA = 0.25
+# 对 attention bias 做数值裁剪，0 表示不裁剪。
+WAVELET_ATTN_BIAS_CLAMP = 0.0
 # 是否只在原本被 mask 的边上施加 bias，避免改动已知连通关系。
 WAVELET_ATTN_BIAS_APPLY_ON_MASKED_EDGES_ONLY = True
 
@@ -164,7 +197,7 @@ WAVELET_SKIP_MAX_AGE_STEPS = 3
 WAVELET_SKIP_NEAR_ROBOT_RADIUS = 2.0 * NODE_RESOLUTION
 
 # 是否用小波响应指导节点保留/裁剪，优先保留结构变化明显的区域。
-WAVELET_GUIDED_NODE_SAMPLING = False
+WAVELET_GUIDED_NODE_SAMPLING = True
 # 节点保留阈值；越高越偏向保留高响应节点。
 WAVELET_NODE_KEEP_THRESH = 0.35
 # 低响应节点的最小保留概率，避免采样过于激进。
@@ -192,7 +225,7 @@ NUM_GPU = 2
 _FEATURE_MODES = {"scalar", "scales", "scales_orient"}
 _POOL_MODES = {"none", "mean", "max"}
 _NORM_METHODS = {"minmax", "percentile", "log_percentile", "fixed_clip"}
-_ATTN_BIAS_TYPES = {"sim_exp", "neg_l1", "neg_l2"}
+_ATTN_BIAS_TYPES = {"sim_exp", "neg_l1", "neg_l2", "diff", "product", "rbf"}
 _CHECKPOINT_NAMES = ("checkpoint_interrupted.pth", "checkpoint_final.pth", "checkpoint.pth")
 _MODEL_CONFIG_KEYS = (
     "use_wavelet_feature",
@@ -210,6 +243,7 @@ _MODEL_CONFIG_KEYS = (
     "wavelet_attn_bias_type",
     "wavelet_attn_bias_beta",
     "wavelet_attn_bias_sigma",
+    "wavelet_attn_bias_clamp",
     "wavelet_attn_bias_apply_on_masked_edges_only",
 )
 
@@ -249,6 +283,40 @@ def _normalize_attn_bias_type(value: str) -> str:
     return normalized
 
 
+def _normalize_curriculum_milestones(
+    values: tuple[int, ...] | list[int] | None,
+    fallback: tuple[int, ...],
+) -> tuple[int, ...]:
+    milestones = tuple(int(value) for value in (values or fallback))
+    if not milestones:
+        milestones = tuple(fallback) or (0,)
+    if milestones[0] != 0:
+        raise ValueError("CURRICULUM_MILESTONES must start at 0")
+    if any(curr < prev for prev, curr in zip(milestones, milestones[1:])):
+        raise ValueError("CURRICULUM_MILESTONES must be non-decreasing")
+    return milestones
+
+
+def _normalize_curriculum_levels(
+    values: tuple[str, ...] | list[str] | None,
+    fallback: tuple[str, ...],
+) -> tuple[str, ...]:
+    raw_values = values if values is not None else fallback
+    levels = tuple(str(value).strip() for value in raw_values if str(value).strip())
+    if not levels:
+        raise ValueError("CURRICULUM_LEVELS must contain at least one non-empty level")
+    return levels
+
+
+def _normalize_optional_path(value: str | Path | None) -> str | None:
+    if value is None:
+        return None
+    normalized = str(value).strip()
+    if not normalized:
+        return None
+    return str(Path(normalized).expanduser().resolve())
+
+
 @dataclass(frozen=True)
 class RuntimeConfig:
     max_episodes: int = MAX_EPISODES
@@ -264,6 +332,30 @@ class RuntimeConfig:
     gif_frame_rate: float = GIF_FRAME_RATE
     summary_window: int = SUMMARY_WINDOW
     train_updates_per_iter: int = TRAIN_UPDATES_PER_ITER
+    enable_nstep: bool = ENABLE_NSTEP
+    n_step: int = N_STEP
+    enable_per: bool = ENABLE_PER
+    per_alpha: float = PER_ALPHA
+    per_beta0: float = PER_BETA0
+    per_beta_steps: int = PER_BETA_STEPS
+    per_eps: float = PER_EPS
+    enable_adaptive_entropy_target: bool = ENABLE_ADAPTIVE_ENTROPY_TARGET
+    entropy_target_scale: float = ENTROPY_TARGET_SCALE
+    enable_soft_target_update: bool = ENABLE_SOFT_TARGET_UPDATE
+    tau: float = TAU
+    policy_delay: int = POLICY_DELAY
+    replay_ratio: float = REPLAY_RATIO
+    enable_reward_decomposition: bool = ENABLE_REWARD_DECOMPOSITION
+    reward_info_weight: float = REWARD_INFO_WEIGHT
+    reward_dist_weight: float = REWARD_DIST_WEIGHT
+    reward_safe_weight: float = REWARD_SAFE_WEIGHT
+    reward_terminal_bonus: float = REWARD_TERMINAL_BONUS
+    enable_curriculum: bool = ENABLE_CURRICULUM
+    curriculum_milestones: tuple[int, ...] = tuple(CURRICULUM_MILESTONES)
+    curriculum_levels: tuple[str, ...] = tuple(CURRICULUM_LEVELS)
+    curriculum_source: str | None = CURRICULUM_SOURCE
+    curriculum_mix_window: int = CURRICULUM_MIX_WINDOW
+    use_curriculum_in_eval: bool = USE_CURRICULUM_IN_EVAL
     result_bucket_episodes: int = RESULT_BUCKET_EPISODES
     load_model: bool = LOAD_MODEL
     resume_from: str | None = None
@@ -296,6 +388,7 @@ class RuntimeConfig:
     wavelet_attn_bias_type: str = WAVELET_ATTN_BIAS_TYPE
     wavelet_attn_bias_beta: float = WAVELET_ATTN_BIAS_BETA
     wavelet_attn_bias_sigma: float = WAVELET_ATTN_BIAS_SIGMA
+    wavelet_attn_bias_clamp: float = WAVELET_ATTN_BIAS_CLAMP
     wavelet_attn_bias_apply_on_masked_edges_only: bool = WAVELET_ATTN_BIAS_APPLY_ON_MASKED_EDGES_ONLY
     wavelet_skip_utility_updates: bool = WAVELET_SKIP_UTILITY_UPDATES
     wavelet_skip_thresh: float = WAVELET_SKIP_THRESH
@@ -322,6 +415,49 @@ class RuntimeConfig:
         object.__setattr__(self, "gif_frame_rate", max(float(self.gif_frame_rate), 1e-3))
         object.__setattr__(self, "summary_window", max(int(self.summary_window), 1))
         object.__setattr__(self, "train_updates_per_iter", max(int(self.train_updates_per_iter), 1))
+        object.__setattr__(self, "enable_nstep", bool(self.enable_nstep))
+        object.__setattr__(self, "n_step", max(int(self.n_step), 1))
+        object.__setattr__(self, "enable_per", bool(self.enable_per))
+        object.__setattr__(self, "per_alpha", min(max(float(self.per_alpha), 0.0), 1.0))
+        object.__setattr__(self, "per_beta0", min(max(float(self.per_beta0), 0.0), 1.0))
+        object.__setattr__(self, "per_beta_steps", max(int(self.per_beta_steps), 1))
+        object.__setattr__(self, "per_eps", max(float(self.per_eps), 1e-12))
+        object.__setattr__(self, "enable_adaptive_entropy_target", bool(self.enable_adaptive_entropy_target))
+        object.__setattr__(self, "entropy_target_scale", float(self.entropy_target_scale))
+        object.__setattr__(self, "enable_soft_target_update", bool(self.enable_soft_target_update))
+        object.__setattr__(self, "tau", max(float(self.tau), 0.0))
+        object.__setattr__(self, "policy_delay", max(int(self.policy_delay), 1))
+        object.__setattr__(self, "replay_ratio", max(float(self.replay_ratio), 0.0))
+        object.__setattr__(self, "enable_reward_decomposition", bool(self.enable_reward_decomposition))
+        object.__setattr__(self, "reward_info_weight", float(self.reward_info_weight))
+        object.__setattr__(self, "reward_dist_weight", float(self.reward_dist_weight))
+        object.__setattr__(self, "reward_safe_weight", float(self.reward_safe_weight))
+        object.__setattr__(self, "reward_terminal_bonus", float(self.reward_terminal_bonus))
+        object.__setattr__(self, "enable_curriculum", bool(self.enable_curriculum))
+        object.__setattr__(
+            self,
+            "curriculum_milestones",
+            _normalize_curriculum_milestones(self.curriculum_milestones, tuple(CURRICULUM_MILESTONES)),
+        )
+        object.__setattr__(
+            self,
+            "curriculum_levels",
+            _normalize_curriculum_levels(self.curriculum_levels, tuple(CURRICULUM_LEVELS)),
+        )
+        if len(self.curriculum_milestones) != len(self.curriculum_levels):
+            raise ValueError("CURRICULUM_MILESTONES and CURRICULUM_LEVELS must have the same length")
+        resolved_curriculum_source = _normalize_optional_path(self.curriculum_source)
+        if self.enable_curriculum and resolved_curriculum_source is None:
+            auto_curriculum_source = get_latest_curriculum_source(self.run_name)
+            if auto_curriculum_source is None:
+                raise ValueError(
+                    "CURRICULUM_SOURCE is not set and no difficulty manifest was found under "
+                    f"{result_path / 'map_difficulty'} or {result_path / 'map_difficulty_smoke'}"
+                )
+            resolved_curriculum_source = str(auto_curriculum_source)
+        object.__setattr__(self, "curriculum_source", resolved_curriculum_source)
+        object.__setattr__(self, "curriculum_mix_window", max(int(self.curriculum_mix_window), 0))
+        object.__setattr__(self, "use_curriculum_in_eval", bool(self.use_curriculum_in_eval))
         object.__setattr__(self, "result_bucket_episodes", max(int(self.result_bucket_episodes), 1))
         object.__setattr__(self, "auto_eval_episodes", max(int(self.auto_eval_episodes), 1))
         object.__setattr__(self, "enable_training_monitor", bool(self.enable_training_monitor))
@@ -359,6 +495,7 @@ class RuntimeConfig:
         )
         object.__setattr__(self, "wavelet_attn_bias_beta", float(self.wavelet_attn_bias_beta))
         object.__setattr__(self, "wavelet_attn_bias_sigma", max(float(self.wavelet_attn_bias_sigma), 1e-6))
+        object.__setattr__(self, "wavelet_attn_bias_clamp", max(float(self.wavelet_attn_bias_clamp), 0.0))
         object.__setattr__(
             self,
             "wavelet_attn_bias_apply_on_masked_edges_only",
@@ -496,6 +633,56 @@ def runtime_config_from_checkpoint(
     if not overrides:
         return base_config
     return base_config.with_overrides(**overrides)
+
+
+def get_curriculum_level_index(episode_index: int, runtime_config: RuntimeConfig | None = None) -> int:
+    runtime_config = runtime_config or RuntimeConfig()
+    index = 0
+    for level_index, milestone in enumerate(runtime_config.curriculum_milestones):
+        if int(episode_index) >= int(milestone):
+            index = level_index
+        else:
+            break
+    return index
+
+
+def get_curriculum_level(episode_index: int, runtime_config: RuntimeConfig | None = None) -> str:
+    runtime_config = runtime_config or RuntimeConfig()
+    return runtime_config.curriculum_levels[get_curriculum_level_index(episode_index, runtime_config)]
+
+
+def _iter_curriculum_source_candidates(run_name: str | None = None) -> list[Path]:
+    candidates: list[Path] = []
+    map_difficulty_root = result_path / "map_difficulty"
+    smoke_root = result_path / "map_difficulty_smoke"
+
+    if run_name == SMOKE_FOLDER_NAME and smoke_root.exists():
+        candidates.append(smoke_root)
+
+    if map_difficulty_root.is_dir():
+        session_dirs = sorted(
+            [path for path in map_difficulty_root.iterdir() if path.is_dir()],
+            key=lambda path: path.name,
+            reverse=True,
+        )
+        candidates.extend(session_dirs)
+
+    if smoke_root.exists() and smoke_root not in candidates:
+        candidates.append(smoke_root)
+
+    return candidates
+
+
+def get_latest_curriculum_source(run_name: str | None = None) -> Path | None:
+    for candidate in _iter_curriculum_source_candidates(run_name):
+        if (candidate / "difficulty_manifest.json").is_file():
+            return candidate.resolve()
+        bucket_root = candidate / "buckets"
+        if bucket_root.is_dir():
+            return candidate.resolve()
+        if candidate.name == "buckets" and candidate.is_dir():
+            return candidate.resolve()
+    return None
 
 
 NODE_INPUT_DIM = get_node_input_dim()

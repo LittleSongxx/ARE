@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import copy
 import os
-import random
 import signal
 import time
 
@@ -47,6 +46,7 @@ if __package__ in (None, ""):
         get_train_path,
         is_smoke_run,
     )
+    from ARiADNE.replay_buffer import ReplayBuffer, episode_buffer_to_transitions
     from ARiADNE.runtime_utils import resolve_ray_num_cpus, resolve_ray_worker_num_cpus, resolve_worker_num_threads
     from ARiADNE.training_monitor import TrainingMonitor
     from ARiADNE.runner import Runner
@@ -78,6 +78,7 @@ else:
         get_train_path,
         is_smoke_run,
     )
+    from .replay_buffer import ReplayBuffer, episode_buffer_to_transitions
     from .runtime_utils import resolve_ray_num_cpus, resolve_ray_worker_num_cpus, resolve_worker_num_threads
     from .training_monitor import TrainingMonitor
     from .runner import Runner
@@ -86,6 +87,35 @@ else:
 
 # ── interrupt handling ──────────────────────────────────────────────────────────
 _interrupted = False
+_TENSORBOARD_TAGS = {
+    "value": "Losses/Value",
+    "policy_loss": "Losses/Policy Loss",
+    "alpha_loss": "Losses/Alpha Loss",
+    "q_value_loss": "Losses/Q Value Loss",
+    "entropy": "Losses/Entropy",
+    "policy_grad_norm": "Losses/Policy Grad Norm",
+    "q_value_grad_norm": "Losses/Q Value Grad Norm",
+    "log_alpha": "Losses/Log Alpha",
+    "reward": "Perf/Reward",
+    "reward_info": "Perf/Reward Info",
+    "reward_dist": "Perf/Reward Dist",
+    "reward_safe": "Perf/Reward Safe",
+    "reward_terminal": "Perf/Reward Terminal",
+    "travel_dist": "Perf/Travel Distance",
+    "explored_rate": "Perf/Explored Rate",
+    "success_rate": "Perf/Success Rate",
+    "episode_return": "Perf/Episode Return",
+    "episode_steps": "Perf/Episode Steps",
+    "curriculum_level_index": "Curriculum/Level Index",
+    "buffer_size": "Replay/buffer_size",
+    "replay_ratio": "Replay/replay_ratio",
+    "per_beta": "Replay/per_beta",
+    "is_weight_mean": "Replay/is_weight_mean",
+    "n_step_mean": "Replay/n_step_mean",
+    "n_valid_mean": "SAC/n_valid_mean",
+    "entropy_target_mean": "SAC/entropy_target_mean",
+    "td_error_mean": "PER/td_error_mean",
+}
 
 
 def _signal_handler(signum, frame):
@@ -103,6 +133,9 @@ def _build_checkpoint_dict(
     policy_net, q1, q2, log_alpha,
     policy_opt, q1_opt, q2_opt, alpha_opt, episode,
     runtime_config: RuntimeConfig,
+    learner_update_step: int = 0,
+    policy_update_step: int = 0,
+    target_q_update_counter: int = 1,
 ):
     """Snapshot the current training state with independent tensor copies.
 
@@ -122,6 +155,9 @@ def _build_checkpoint_dict(
         "q_net2_optimizer": copy.deepcopy(q2_opt.state_dict()),
         "log_alpha_optimizer": copy.deepcopy(alpha_opt.state_dict()),
         "episode": episode,
+        "learner_update_step": int(learner_update_step),
+        "policy_update_step": int(policy_update_step),
+        "target_q_update_counter": int(target_q_update_counter),
         "config_snapshot": checkpoint_model_config(runtime_config),
         "node_input_dim": get_node_input_dim(runtime_config),
         "critic_node_input_dim": get_critic_node_input_dim(runtime_config),
@@ -230,6 +266,144 @@ def _format_metric(value) -> str:
     return f"{value:.4f}"
 
 
+def _nanmean_or_nan(values) -> float:
+    array = np.asarray(list(values), dtype=np.float64)
+    if array.size == 0 or np.all(np.isnan(array)):
+        return float("nan")
+    return float(np.nanmean(array))
+
+
+def _resolve_per_beta(runtime_config: RuntimeConfig, learner_update_step: int) -> float:
+    if not runtime_config.enable_per:
+        return float("nan")
+    progress = min(max(float(learner_update_step), 0.0) / float(runtime_config.per_beta_steps), 1.0)
+    return float(runtime_config.per_beta0 + progress * (1.0 - runtime_config.per_beta0))
+
+
+def _resolve_updates_to_run(runtime_config: RuntimeConfig, pending_update_budget: float) -> int:
+    if runtime_config.replay_ratio <= 0:
+        return int(runtime_config.train_updates_per_iter)
+    return min(int(max(pending_update_budget, 0.0)), int(runtime_config.train_updates_per_iter))
+
+
+def _actor_update_due(learner_update_step: int, policy_delay: int) -> bool:
+    return ((int(learner_update_step) + 1) % max(int(policy_delay), 1)) == 0
+
+
+def _resume_counters_from_checkpoint(checkpoint: dict[str, object]) -> tuple[int, int, int]:
+    return (
+        int(checkpoint.get("learner_update_step", 0)),
+        int(checkpoint.get("policy_update_step", 0)),
+        int(checkpoint.get("target_q_update_counter", 1)),
+    )
+
+
+def _soft_update(target_module: nn.Module, source_module: nn.Module, tau: float) -> None:
+    with torch.no_grad():
+        for target_param, source_param in zip(target_module.parameters(), source_module.parameters()):
+            target_param.mul_(1.0 - tau).add_(source_param, alpha=tau)
+
+
+def _maybe_sync_target_networks(
+    runtime_config: RuntimeConfig,
+    target_q_update_counter: int,
+    global_target_q_net1: nn.Module,
+    global_target_q_net2: nn.Module,
+    global_q_net1: nn.Module,
+    global_q_net2: nn.Module,
+) -> int:
+    if runtime_config.enable_soft_target_update and runtime_config.tau > 0:
+        _soft_update(global_target_q_net1, global_q_net1, runtime_config.tau)
+        _soft_update(global_target_q_net2, global_q_net2, runtime_config.tau)
+        return target_q_update_counter
+
+    target_q_update_counter += 1
+    if target_q_update_counter > 64:
+        target_q_update_counter = 1
+        global_target_q_net1.load_state_dict(global_q_net1.state_dict())
+        global_target_q_net2.load_state_dict(global_q_net2.state_dict())
+        global_target_q_net1.eval()
+        global_target_q_net2.eval()
+    return target_q_update_counter
+
+
+def _resolve_entropy_target_tensor(
+    edge_padding_mask: torch.Tensor,
+    runtime_config: RuntimeConfig,
+    default_entropy_target: float,
+) -> tuple[torch.Tensor, float, float]:
+    if not runtime_config.enable_adaptive_entropy_target:
+        return (
+            torch.full(
+                (edge_padding_mask.size(0),),
+                float(default_entropy_target),
+                dtype=torch.float32,
+                device=edge_padding_mask.device,
+            ),
+            float("nan"),
+            float("nan"),
+        )
+
+    n_valid = (edge_padding_mask == 0).sum(dim=-1).float().squeeze(1).clamp_min(1.0)
+    entropy_target_tensor = runtime_config.entropy_target_scale * torch.log(n_valid)
+    return entropy_target_tensor, float(n_valid.mean().item()), float(entropy_target_tensor.mean().item())
+
+
+def _move_batch_to_device(batch: dict[str, torch.Tensor | None], device: torch.device) -> dict[str, torch.Tensor | None]:
+    return {
+        field_name: value.to(device) if isinstance(value, torch.Tensor) else None
+        for field_name, value in batch.items()
+    }
+
+
+def _build_actor_observation(batch: dict[str, torch.Tensor | None]) -> list[torch.Tensor | None]:
+    return [
+        batch["node_inputs"],
+        batch["node_padding_mask"],
+        batch["edge_mask"],
+        batch["current_index"],
+        batch["current_edge"],
+        batch["edge_padding_mask"],
+        batch["actor_attn_bias"],
+    ]
+
+
+def _build_next_actor_observation(batch: dict[str, torch.Tensor | None]) -> list[torch.Tensor | None]:
+    return [
+        batch["next_node_inputs"],
+        batch["next_node_padding_mask"],
+        batch["next_edge_mask"],
+        batch["next_current_index"],
+        batch["next_current_edge"],
+        batch["next_edge_padding_mask"],
+        batch["actor_next_attn_bias"],
+    ]
+
+
+def _build_critic_observation(batch: dict[str, torch.Tensor | None]) -> list[torch.Tensor | None]:
+    return [
+        batch["critic_node_inputs"],
+        batch["critic_node_padding_mask"],
+        batch["critic_edge_mask"],
+        batch["critic_current_index"],
+        batch["critic_current_edge"],
+        batch["critic_edge_padding_mask"],
+        batch["critic_attn_bias"],
+    ]
+
+
+def _build_next_critic_observation(batch: dict[str, torch.Tensor | None]) -> list[torch.Tensor | None]:
+    return [
+        batch["critic_next_node_inputs"],
+        batch["critic_next_node_padding_mask"],
+        batch["critic_next_edge_mask"],
+        batch["critic_next_current_index"],
+        batch["critic_next_current_edge"],
+        batch["critic_next_edge_padding_mask"],
+        batch["critic_next_attn_bias"],
+    ]
+
+
 def _print_train_progress(curr_episode, max_episodes, train_metrics, buffer_size, elapsed_sec):
     total_episodes = max(max_episodes, 1)
     progress = 100.0 * curr_episode / total_episodes
@@ -259,6 +433,9 @@ def _save_checkpoint(
     global_q_net2_optimizer,
     log_alpha_optimizer,
     curr_episode,
+    learner_update_step,
+    policy_update_step,
+    target_q_update_counter,
     bucket_size,
     current_checkpoint_path,
     current_model_path,
@@ -267,85 +444,43 @@ def _save_checkpoint(
     if current_checkpoint_path is None:
         return
 
-    checkpoint = {
-        "policy_model": global_policy_net.state_dict(),
-        "q_net1_model": global_q_net1.state_dict(),
-        "q_net2_model": global_q_net2.state_dict(),
-        "log_alpha": log_alpha.detach().cpu(),
-        "policy_optimizer": global_policy_optimizer.state_dict(),
-        "q_net1_optimizer": global_q_net1_optimizer.state_dict(),
-        "q_net2_optimizer": global_q_net2_optimizer.state_dict(),
-        "log_alpha_optimizer": log_alpha_optimizer.state_dict(),
-        "episode": curr_episode,
-        "config_snapshot": checkpoint_model_config(runtime_config),
-        "node_input_dim": get_node_input_dim(runtime_config),
-        "critic_node_input_dim": get_critic_node_input_dim(runtime_config),
-    }
+    checkpoint = _build_checkpoint_dict(
+        global_policy_net,
+        global_q_net1,
+        global_q_net2,
+        log_alpha,
+        global_policy_optimizer,
+        global_q_net1_optimizer,
+        global_q_net2_optimizer,
+        log_alpha_optimizer,
+        curr_episode,
+        runtime_config,
+        learner_update_step=learner_update_step,
+        policy_update_step=policy_update_step,
+        target_q_update_counter=target_q_update_counter,
+    )
     torch.save(checkpoint, current_checkpoint_path)
     if current_model_path is not None:
         bucket_dir = ensure_bucket_dir(current_model_path, curr_episode, bucket_size)
         torch.save(checkpoint, bucket_dir / "checkpoint.pth")
 
 
-def _stack_optional_tensors(values, device):
-    if not values or values[0] is None:
-        return None
-    first = values[0]
-    if isinstance(first, torch.Tensor) and first.dim() >= 1 and first.size(0) == 1:
-        return torch.cat(values, dim=0).to(device)
-    return torch.stack(values).to(device)
-
-
 def _write_to_tensor_board(writer, tensorboard_data, curr_episode):
-    tensorboard_data = np.array(tensorboard_data)
-    tensorboard_data = list(np.nanmean(tensorboard_data, axis=0))
-    (
-        reward,
-        value,
-        policy_loss,
-        q_value_loss,
-        entropy,
-        policy_grad_norm,
-        q_value_grad_norm,
-        log_alpha,
-        alpha_loss,
-        travel_dist,
-        success_rate,
-        explored_rate,
-        episode_return,
-        episode_steps,
-    ) = tensorboard_data
+    aggregated: dict[str, float] = {}
+    keys = {key for record in tensorboard_data for key in record}
+    for key in keys:
+        aggregated[key] = _nanmean_or_nan(record.get(key, float("nan")) for record in tensorboard_data)
 
-    writer.add_scalar(tag="Losses/Value", scalar_value=value, global_step=curr_episode)
-    writer.add_scalar(tag="Losses/Policy Loss", scalar_value=policy_loss, global_step=curr_episode)
-    writer.add_scalar(tag="Losses/Alpha Loss", scalar_value=alpha_loss, global_step=curr_episode)
-    writer.add_scalar(tag="Losses/Q Value Loss", scalar_value=q_value_loss, global_step=curr_episode)
-    writer.add_scalar(tag="Losses/Entropy", scalar_value=entropy, global_step=curr_episode)
-    writer.add_scalar(tag="Losses/Policy Grad Norm", scalar_value=policy_grad_norm, global_step=curr_episode)
-    writer.add_scalar(tag="Losses/Q Value Grad Norm", scalar_value=q_value_grad_norm, global_step=curr_episode)
-    writer.add_scalar(tag="Losses/Log Alpha", scalar_value=log_alpha, global_step=curr_episode)
-    writer.add_scalar(tag="Perf/Reward", scalar_value=reward, global_step=curr_episode)
-    writer.add_scalar(tag="Perf/Travel Distance", scalar_value=travel_dist, global_step=curr_episode)
-    writer.add_scalar(tag="Perf/Explored Rate", scalar_value=explored_rate, global_step=curr_episode)
-    writer.add_scalar(tag="Perf/Success Rate", scalar_value=success_rate, global_step=curr_episode)
-    writer.add_scalar(tag="Perf/Episode Return", scalar_value=episode_return, global_step=curr_episode)
-    writer.add_scalar(tag="Perf/Episode Steps", scalar_value=episode_steps, global_step=curr_episode)
-    return {
-        "reward": reward,
-        "value": value,
-        "policy_loss": policy_loss,
-        "q_value_loss": q_value_loss,
-        "entropy": entropy,
-        "policy_grad_norm": policy_grad_norm,
-        "q_value_grad_norm": q_value_grad_norm,
-        "log_alpha": log_alpha,
-        "alpha_loss": alpha_loss,
-        "travel_dist": travel_dist,
-        "success_rate": success_rate,
-        "explored_rate": explored_rate,
-        "episode_return": episode_return,
-        "episode_steps": episode_steps,
-    }
+    for key, tag in _TENSORBOARD_TAGS.items():
+        if key not in aggregated or np.isnan(aggregated[key]):
+            continue
+        writer.add_scalar(tag=tag, scalar_value=aggregated[key], global_step=curr_episode)
+    return aggregated
+
+
+def _append_perf_metrics(perf_metrics: dict[str, list[float]], metrics: dict[str, object]) -> None:
+    for name, value in metrics.items():
+        perf_metrics.setdefault(name, []).append(float(value))
 
 
 def _write_eval_to_tensor_board(writer, eval_summary, curr_episode):
@@ -470,6 +605,15 @@ def main(runtime_config: RuntimeConfig | None = None) -> dict:
         f"batch_size={runtime_config.batch_size} "
         f"train_updates_per_iter={runtime_config.train_updates_per_iter}"
     )
+    if runtime_config.enable_curriculum:
+        print(
+            "curriculum_config "
+            f"source={runtime_config.curriculum_source} "
+            f"levels={runtime_config.curriculum_levels} "
+            f"milestones={runtime_config.curriculum_milestones} "
+            f"mix_window={runtime_config.curriculum_mix_window} "
+            f"use_in_eval={int(runtime_config.use_curriculum_in_eval)}"
+        )
     numba_status = get_numba_runtime_status()
     print(
         "numba_runtime "
@@ -497,10 +641,12 @@ def main(runtime_config: RuntimeConfig | None = None) -> dict:
     global_q_net1_optimizer = optim.Adam(global_q_net1.parameters(), lr=LR)
     global_q_net2_optimizer = optim.Adam(global_q_net2.parameters(), lr=LR)
     log_alpha_optimizer = optim.Adam([log_alpha], lr=1e-4)
-    entropy_target = 0.05 * (-np.log(1 / K_SIZE))
+    entropy_target = runtime_config.entropy_target_scale * (-np.log(1 / K_SIZE))
 
     curr_episode = 0
     next_episode = 0
+    learner_update_step = 0
+    policy_update_step = 0
     target_q_update_counter = 1
 
     checkpoint_source = None
@@ -529,7 +675,17 @@ def main(runtime_config: RuntimeConfig | None = None) -> dict:
         log_alpha_optimizer.load_state_dict(checkpoint["log_alpha_optimizer"])
         curr_episode = checkpoint["episode"]
         next_episode = curr_episode
-        print(f"loading_model checkpoint={checkpoint_source} resume_episode={curr_episode}")
+        learner_update_step, policy_update_step, target_q_update_counter = _resume_counters_from_checkpoint(checkpoint)
+        print(
+            f"loading_model checkpoint={checkpoint_source} resume_episode={curr_episode} "
+            f"learner_update_step={learner_update_step} "
+            f"policy_update_step={policy_update_step}"
+        )
+        print(
+            "resume_replay_reset "
+            f"minimum_buffer_size={runtime_config.minimum_buffer_size} "
+            "replay_restored=0"
+        )
 
     global_target_q_net1.load_state_dict(global_q_net1.state_dict())
     global_target_q_net2.load_state_dict(global_q_net2.state_dict())
@@ -560,10 +716,14 @@ def main(runtime_config: RuntimeConfig | None = None) -> dict:
         next_episode += 1
         job_list.append(meta_agent.job.remote(weights_set, next_episode))
 
-    metric_name = ["travel_dist", "success_rate", "explored_rate", "episode_return", "episode_steps"]
-    training_data = []
-    perf_metrics = {name: [] for name in metric_name}
-    experience_buffer = [[] for _ in range(31)]
+    training_data: list[dict[str, float]] = []
+    perf_metrics: dict[str, list[float]] = {}
+    replay_buffer = ReplayBuffer(
+        runtime_config.replay_size,
+        prioritized=runtime_config.enable_per,
+        alpha=runtime_config.per_alpha,
+    )
+    pending_update_budget = 0.0
     save_gap = max(int(runtime_config.save_img_gap), 1)
     auto_eval_episodes = set()
     _last_good_checkpoint = None
@@ -577,14 +737,12 @@ def main(runtime_config: RuntimeConfig | None = None) -> dict:
             for job in done_jobs:
                 job_results, metrics, info = job
                 completed_episodes.append(info["episode_number"])
-                for i in range(len(experience_buffer)):
-                    experience_buffer[i] += job_results[i]
-                for name in metric_name:
-                    perf_metrics[name].append(metrics[name])
+                for transition in episode_buffer_to_transitions(job_results):
+                    replay_buffer.push(transition)
+                _append_perf_metrics(perf_metrics, metrics)
 
-            buffer_size = len(experience_buffer[0])
-            for i in range(len(experience_buffer)):
-                assert len(experience_buffer[i]) == buffer_size
+            new_transitions = sum(len(job[0][0]) for job in done_jobs)
+            buffer_size = replay_buffer.size
 
             curr_episode = max(job[2]["episode_number"] for job in done_jobs)
             latest_metrics = done_jobs[-1][1]
@@ -592,7 +750,7 @@ def main(runtime_config: RuntimeConfig | None = None) -> dict:
                 "episode_complete "
                 f"episode={curr_episode}/{runtime_config.max_episodes} "
                 f"meta_agent={done_jobs[-1][2]['id']} "
-                f"buffer={len(experience_buffer[0])} "
+                f"buffer={buffer_size} "
                 f"travel_dist={_format_metric(latest_metrics['travel_dist'])} "
                 f"explored_rate={_format_metric(latest_metrics['explored_rate'])} "
                 f"success_rate={_format_metric(latest_metrics['success_rate'])} "
@@ -604,108 +762,35 @@ def main(runtime_config: RuntimeConfig | None = None) -> dict:
                 next_episode += 1
                 job_list.append(meta_agents[info["id"]].job.remote(weights_set, next_episode))
 
-            if len(experience_buffer[0]) >= runtime_config.minimum_buffer_size:
-                if len(experience_buffer[0]) >= runtime_config.replay_size:
-                    for i in range(len(experience_buffer)):
-                        experience_buffer[i] = experience_buffer[i][-runtime_config.replay_size :]
+            if runtime_config.replay_ratio > 0:
+                pending_update_budget += new_transitions * runtime_config.replay_ratio
 
-                indices = list(range(len(experience_buffer[0])))
-                sample_batch_size = min(runtime_config.batch_size, len(indices))
+            if buffer_size >= runtime_config.minimum_buffer_size:
+                updates_to_run = _resolve_updates_to_run(runtime_config, pending_update_budget)
 
-                for _ in range(runtime_config.train_updates_per_iter):
-                    if sample_batch_size == 0:
+                sample_batch_size = min(runtime_config.batch_size, buffer_size)
+                for _ in range(updates_to_run):
+                    if sample_batch_size <= 0:
                         break
-                    sample_indices = random.sample(indices, sample_batch_size)
-                    rollouts = []
-                    for i in range(len(experience_buffer)):
-                        rollouts.append([experience_buffer[i][index] for index in sample_indices])
 
-                    node_inputs = torch.stack(rollouts[0]).to(device)
-                    node_padding_mask = torch.stack(rollouts[1]).to(device)
-                    edge_mask = torch.stack(rollouts[2]).to(device)
-                    current_index = torch.stack(rollouts[3]).to(device)
-                    current_edge = torch.stack(rollouts[4]).to(device)
-                    edge_padding_mask = torch.stack(rollouts[5]).to(device)
-                    action = torch.stack(rollouts[6]).to(device)
-                    reward = torch.stack(rollouts[7]).to(device)
-                    done = torch.stack(rollouts[8]).to(device)
-                    next_node_inputs = torch.stack(rollouts[9]).to(device)
-                    next_node_padding_mask = torch.stack(rollouts[10]).to(device)
-                    next_edge_mask = torch.stack(rollouts[11]).to(device)
-                    next_current_index = torch.stack(rollouts[12]).to(device)
-                    next_current_edge = torch.stack(rollouts[13]).to(device)
-                    next_edge_padding_mask = torch.stack(rollouts[14]).to(device)
+                    per_beta = _resolve_per_beta(runtime_config, learner_update_step)
+                    replay_sample = replay_buffer.sample(
+                        sample_batch_size,
+                        beta=per_beta if runtime_config.enable_per else None,
+                    )
+                    batch = _move_batch_to_device(replay_sample.batch, device)
+                    is_weights = replay_sample.is_weights.to(device).unsqueeze(-1)
 
-                    critic_node_inputs = torch.stack(rollouts[15]).to(device)
-                    critic_node_padding_mask = torch.stack(rollouts[16]).to(device)
-                    critic_edge_mask = torch.stack(rollouts[17]).to(device)
-                    critic_current_index = torch.stack(rollouts[18]).to(device)
-                    critic_current_edge = torch.stack(rollouts[19]).to(device)
-                    critic_edge_padding_mask = torch.stack(rollouts[20]).to(device)
-                    critic_next_node_inputs = torch.stack(rollouts[21]).to(device)
-                    critic_next_node_padding_mask = torch.stack(rollouts[22]).to(device)
-                    critic_next_edge_mask = torch.stack(rollouts[23]).to(device)
-                    critic_next_current_index = torch.stack(rollouts[24]).to(device)
-                    critic_next_current_edge = torch.stack(rollouts[25]).to(device)
-                    critic_next_edge_padding_mask = torch.stack(rollouts[26]).to(device)
-                    actor_attn_bias = _stack_optional_tensors(rollouts[27], device)
-                    actor_next_attn_bias = _stack_optional_tensors(rollouts[28], device)
-                    critic_attn_bias = _stack_optional_tensors(rollouts[29], device)
-                    critic_next_attn_bias = _stack_optional_tensors(rollouts[30], device)
+                    observation = _build_actor_observation(batch)
+                    next_observation = _build_next_actor_observation(batch)
+                    critic_observation = _build_critic_observation(batch)
+                    critic_next_observation = _build_next_critic_observation(batch)
 
-                    observation = [
-                        node_inputs,
-                        node_padding_mask,
-                        edge_mask,
-                        current_index,
-                        current_edge,
-                        edge_padding_mask,
-                        actor_attn_bias,
-                    ]
-                    next_observation = [
-                        next_node_inputs,
-                        next_node_padding_mask,
-                        next_edge_mask,
-                        next_current_index,
-                        next_current_edge,
-                        next_edge_padding_mask,
-                        actor_next_attn_bias,
-                    ]
-
-                    critic_observation = [
-                        critic_node_inputs,
-                        critic_node_padding_mask,
-                        critic_edge_mask,
-                        critic_current_index,
-                        critic_current_edge,
-                        critic_edge_padding_mask,
-                        critic_attn_bias,
-                    ]
-                    critic_next_observation = [
-                        critic_next_node_inputs,
-                        critic_next_node_padding_mask,
-                        critic_next_edge_mask,
-                        critic_next_current_index,
-                        critic_next_current_edge,
-                        critic_next_edge_padding_mask,
-                        critic_next_attn_bias,
-                    ]
-
-                    with torch.no_grad():
-                        q_values1 = q1_wrapper(*critic_observation)
-                        q_values2 = q2_wrapper(*critic_observation)
-                        q_values = torch.min(q_values1, q_values2)
-
-                    logp = policy_wrapper(*observation)
-                    policy_loss = torch.sum(
-                        logp.exp().unsqueeze(2) * (log_alpha.exp().detach() * logp.unsqueeze(2) - q_values.detach()),
-                        dim=1,
-                    ).mean()
-
-                    global_policy_optimizer.zero_grad()
-                    policy_loss.backward()
-                    policy_grad_norm = torch.nn.utils.clip_grad_norm_(global_policy_net.parameters(), max_norm=100, norm_type=2)
-                    global_policy_optimizer.step()
+                    action = batch["action"]
+                    reward = batch["reward"]
+                    done = batch["done"].float()
+                    gamma_pow = batch["gamma_pow"]
+                    n_step_actual = batch["n_step_actual"].float()
 
                     with torch.no_grad():
                         next_logp = policy_wrapper(*next_observation)
@@ -713,54 +798,140 @@ def main(runtime_config: RuntimeConfig | None = None) -> dict:
                         next_q_values2 = target_q2_wrapper(*critic_next_observation)
                         next_q_values = torch.min(next_q_values1, next_q_values2)
                         value_prime = torch.sum(
-                            next_logp.unsqueeze(2).exp()
+                            next_logp.exp().unsqueeze(2)
                             * (next_q_values - log_alpha.exp() * next_logp.unsqueeze(2)),
                             dim=1,
                         ).unsqueeze(1)
-                        target_q = reward + GAMMA * (1 - done) * value_prime
+                        target_q = reward + gamma_pow * (1.0 - done) * value_prime
 
-                    mse_loss = nn.MSELoss()
                     q_values1 = q1_wrapper(*critic_observation)
                     q1 = torch.gather(q_values1, 1, action)
-                    q1_loss = mse_loss(q1, target_q.detach()).mean()
-
+                    q1_error = torch.square(q1 - target_q.detach())
+                    q1_loss = (q1_error * is_weights).mean() if runtime_config.enable_per else q1_error.mean()
                     global_q_net1_optimizer.zero_grad()
                     q1_loss.backward()
-                    q_grad_norm = torch.nn.utils.clip_grad_norm_(global_q_net1.parameters(), max_norm=20000, norm_type=2)
+                    q1_grad_norm = torch.nn.utils.clip_grad_norm_(
+                        global_q_net1.parameters(),
+                        max_norm=20000,
+                        norm_type=2,
+                    )
                     global_q_net1_optimizer.step()
 
                     q_values2 = q2_wrapper(*critic_observation)
                     q2 = torch.gather(q_values2, 1, action)
-                    q2_loss = mse_loss(q2, target_q.detach()).mean()
-
+                    q2_error = torch.square(q2 - target_q.detach())
+                    q2_loss = (q2_error * is_weights).mean() if runtime_config.enable_per else q2_error.mean()
                     global_q_net2_optimizer.zero_grad()
                     q2_loss.backward()
-                    q_grad_norm = torch.nn.utils.clip_grad_norm_(global_q_net2.parameters(), max_norm=20000, norm_type=2)
+                    q2_grad_norm = torch.nn.utils.clip_grad_norm_(
+                        global_q_net2.parameters(),
+                        max_norm=20000,
+                        norm_type=2,
+                    )
                     global_q_net2_optimizer.step()
 
-                    entropy = (logp * logp.exp()).sum(dim=-1)
-                    alpha_loss = -(log_alpha * (entropy.detach() + entropy_target)).mean()
+                    td_error_mean = float("nan")
+                    if runtime_config.enable_per:
+                        with torch.no_grad():
+                            updated_q1 = torch.gather(q1_wrapper(*critic_observation), 1, action)
+                            updated_q2 = torch.gather(q2_wrapper(*critic_observation), 1, action)
+                            td_error = 0.5 * (
+                                (updated_q1 - target_q).abs() + (updated_q2 - target_q).abs()
+                            )
+                        td_error_cpu = td_error.squeeze(-1).squeeze(-1).detach().cpu().numpy() + runtime_config.per_eps
+                        replay_buffer.update_priorities(replay_sample.indices, td_error_cpu)
+                        td_error_mean = float(td_error.mean().item())
 
-                    log_alpha_optimizer.zero_grad()
-                    alpha_loss.backward()
-                    log_alpha_optimizer.step()
-
-                    target_q_update_counter += 1
-                    perf_data = [np.nanmean(perf_metrics[name]) for name in metric_name]
-                    training_data.append(
-                        [
-                            reward.mean().item(),
-                            value_prime.mean().item(),
-                            policy_loss.item(),
-                            q1_loss.item(),
-                            entropy.mean().item(),
-                            policy_grad_norm.item(),
-                            q_grad_norm.item(),
-                            log_alpha.item(),
-                            alpha_loss.item(),
-                            *perf_data,
-                        ]
+                    target_q_update_counter = _maybe_sync_target_networks(
+                        runtime_config,
+                        target_q_update_counter,
+                        global_target_q_net1,
+                        global_target_q_net2,
+                        global_q_net1,
+                        global_q_net2,
                     )
+
+                    actor_step = _actor_update_due(learner_update_step, runtime_config.policy_delay)
+                    policy_loss_value = float("nan")
+                    alpha_loss_value = float("nan")
+                    entropy_value = float("nan")
+                    policy_grad_norm_value = float("nan")
+                    n_valid_mean = float("nan")
+                    entropy_target_mean = float("nan")
+                    if actor_step:
+                        q_values1 = q1_wrapper(*critic_observation)
+                        q_values2 = q2_wrapper(*critic_observation)
+                        q_values = torch.min(q_values1, q_values2)
+                        logp = policy_wrapper(*observation)
+                        policy_loss = torch.sum(
+                            logp.exp().unsqueeze(2)
+                            * (log_alpha.exp().detach() * logp.unsqueeze(2) - q_values.detach()),
+                            dim=1,
+                        ).mean()
+
+                        global_policy_optimizer.zero_grad()
+                        policy_loss.backward()
+                        policy_grad_norm = torch.nn.utils.clip_grad_norm_(
+                            global_policy_net.parameters(),
+                            max_norm=100,
+                            norm_type=2,
+                        )
+                        global_policy_optimizer.step()
+                        policy_update_step += 1
+
+                        entropy = (logp * logp.exp()).sum(dim=-1)
+                        entropy_target_tensor, n_valid_mean, entropy_target_mean = _resolve_entropy_target_tensor(
+                            batch["edge_padding_mask"],
+                            runtime_config,
+                            entropy_target,
+                        )
+
+                        alpha_loss = -(log_alpha * (entropy.detach() + entropy_target_tensor)).mean()
+                        log_alpha_optimizer.zero_grad()
+                        alpha_loss.backward()
+                        log_alpha_optimizer.step()
+
+                        policy_loss_value = float(policy_loss.item())
+                        alpha_loss_value = float(alpha_loss.item())
+                        entropy_value = float(entropy.mean().item())
+                        policy_grad_norm_value = float(policy_grad_norm.item())
+                    elif runtime_config.enable_adaptive_entropy_target:
+                        _, n_valid_mean, entropy_target_mean = _resolve_entropy_target_tensor(
+                            batch["edge_padding_mask"],
+                            runtime_config,
+                            entropy_target,
+                        )
+
+                    learner_update_step += 1
+                    if runtime_config.replay_ratio > 0:
+                        pending_update_budget = max(0.0, pending_update_budget - 1.0)
+
+                    perf_data = {
+                        name: _nanmean_or_nan(values)
+                        for name, values in perf_metrics.items()
+                        if values
+                    }
+                    training_record = {
+                        "reward": float(reward.mean().item()),
+                        "value": float(value_prime.mean().item()),
+                        "policy_loss": policy_loss_value,
+                        "q_value_loss": float(0.5 * (q1_loss.item() + q2_loss.item())),
+                        "entropy": entropy_value,
+                        "policy_grad_norm": policy_grad_norm_value,
+                        "q_value_grad_norm": float(max(float(q1_grad_norm.item()), float(q2_grad_norm.item()))),
+                        "log_alpha": float(log_alpha.item()),
+                        "alpha_loss": alpha_loss_value,
+                        "buffer_size": float(buffer_size),
+                        "replay_ratio": float(runtime_config.replay_ratio),
+                        "per_beta": per_beta,
+                        "is_weight_mean": float(is_weights.mean().item()),
+                        "n_step_mean": float(n_step_actual.mean().item()),
+                        "n_valid_mean": n_valid_mean,
+                        "entropy_target_mean": entropy_target_mean,
+                        "td_error_mean": td_error_mean,
+                        **perf_data,
+                    }
+                    training_data.append(training_record)
 
             if len(training_data) >= runtime_config.summary_window:
                 writer, current_writer_bucket = _maybe_rotate_writer(
@@ -776,19 +947,20 @@ def main(runtime_config: RuntimeConfig | None = None) -> dict:
                     training_monitor.update_system(
                         curr_episode,
                         {
-                            "buffer_size": len(experience_buffer[0]),
+                            "buffer_size": replay_buffer.size,
                             "completed_episodes": curr_episode,
+                            "learner_updates": learner_update_step,
                         },
                     )
                 _print_train_progress(
                     curr_episode,
                     runtime_config.max_episodes,
                     train_metrics,
-                    len(experience_buffer[0]),
+                    replay_buffer.size,
                     time.time() - train_start_time,
                 )
                 training_data = []
-                perf_metrics = {name: [] for name in metric_name}
+                perf_metrics = {}
 
             weights_set = [_state_dict_to_device(global_policy_net.state_dict(), local_device)]
 
@@ -798,14 +970,10 @@ def main(runtime_config: RuntimeConfig | None = None) -> dict:
                 global_policy_optimizer, global_q_net1_optimizer,
                 global_q_net2_optimizer, log_alpha_optimizer, curr_episode,
                 runtime_config,
+                learner_update_step=learner_update_step,
+                policy_update_step=policy_update_step,
+                target_q_update_counter=target_q_update_counter,
             )
-
-            if target_q_update_counter > 64:
-                target_q_update_counter = 1
-                global_target_q_net1.load_state_dict(global_q_net1.state_dict())
-                global_target_q_net2.load_state_dict(global_q_net2.state_dict())
-                global_target_q_net1.eval()
-                global_target_q_net2.eval()
 
             if not runtime_config.enable_auto_eval:
                 continue
@@ -850,7 +1018,8 @@ def main(runtime_config: RuntimeConfig | None = None) -> dict:
             global_policy_net, global_q_net1, global_q_net2, log_alpha,
             global_policy_optimizer, global_q_net1_optimizer,
             global_q_net2_optimizer, log_alpha_optimizer,
-            curr_episode, runtime_config.result_bucket_episodes,
+            curr_episode, learner_update_step, policy_update_step, target_q_update_counter,
+            runtime_config.result_bucket_episodes,
             current_checkpoint_path, current_model_path, runtime_config,
         )
         if current_checkpoint_path is not None:

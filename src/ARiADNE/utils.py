@@ -615,15 +615,26 @@ def build_wavelet_attn_bias(
         raise ValueError(f"wavelet_feature must have shape [B, N, D] or [B, N], got {tuple(feature.shape)}")
 
     pairwise_diff = feature.unsqueeze(-2) - feature.unsqueeze(-3)
-    if runtime_config.wavelet_attn_bias_type == "sim_exp":
+    scale = float(runtime_config.wavelet_attn_bias_beta)
+    if scale == 0.0:
+        bias = torch.zeros(feature.size(0), feature.size(1), feature.size(1), dtype=feature.dtype, device=feature.device)
+    elif runtime_config.wavelet_attn_bias_type == "sim_exp":
         dist = torch.linalg.norm(pairwise_diff, ord=2, dim=-1)
-        bias = runtime_config.wavelet_attn_bias_beta * torch.exp(
-            -dist / runtime_config.wavelet_attn_bias_sigma
-        )
-    elif runtime_config.wavelet_attn_bias_type == "neg_l1":
-        bias = -runtime_config.wavelet_attn_bias_beta * pairwise_diff.abs().sum(dim=-1)
+        bias = scale * torch.exp(-dist / runtime_config.wavelet_attn_bias_sigma)
+    elif runtime_config.wavelet_attn_bias_type in {"neg_l1", "diff"}:
+        bias = -scale * pairwise_diff.abs().mean(dim=-1)
+    elif runtime_config.wavelet_attn_bias_type == "product":
+        bias = scale * torch.sum(feature.unsqueeze(-2) * feature.unsqueeze(-3), dim=-1)
+    elif runtime_config.wavelet_attn_bias_type == "rbf":
+        squared_dist = torch.square(pairwise_diff).sum(dim=-1)
+        sigma_sq = max(float(runtime_config.wavelet_attn_bias_sigma) ** 2, float(runtime_config.wavelet_eps))
+        bias = scale * torch.exp(-squared_dist / sigma_sq)
     else:
-        bias = -runtime_config.wavelet_attn_bias_beta * torch.linalg.norm(pairwise_diff, ord=2, dim=-1)
+        bias = -scale * torch.linalg.norm(pairwise_diff, ord=2, dim=-1)
+
+    if runtime_config.wavelet_attn_bias_clamp > 0:
+        clamp = float(runtime_config.wavelet_attn_bias_clamp)
+        bias = torch.clamp(bias, min=-clamp, max=clamp)
 
     if node_padding_mask is not None:
         node_padding_mask = torch.as_tensor(node_padding_mask, device=bias.device)

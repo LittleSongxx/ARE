@@ -33,9 +33,20 @@ class TrainingMonitor:
 
         self.plot_groups = [
             ("Reward / Return", [("train_metrics", "reward"), ("train_metrics", "episode_return"), ("eval_metrics", "episode_return")], "Value"),
+            (
+                "Reward Components",
+                [
+                    ("train_metrics", "reward_info"),
+                    ("train_metrics", "reward_dist"),
+                    ("train_metrics", "reward_safe"),
+                    ("train_metrics", "reward_terminal"),
+                ],
+                "Value",
+            ),
             ("Losses", [("train_metrics", "policy_loss"), ("train_metrics", "q_value_loss"), ("train_metrics", "alpha_loss")], "Loss"),
             ("Value / Entropy", [("train_metrics", "value"), ("train_metrics", "entropy"), ("train_metrics", "log_alpha")], "Value"),
             ("Grad Norms", [("train_metrics", "policy_grad_norm"), ("train_metrics", "q_value_grad_norm")], "Norm"),
+            ("Curriculum", [("train_metrics", "curriculum_level_index")], "Level"),
             ("Exploration / Success", [("train_metrics", "explored_rate"), ("train_metrics", "success_rate"), ("eval_metrics", "explored_rate"), ("eval_metrics", "success_rate")], "Rate"),
             ("Distance / Steps", [("train_metrics", "travel_dist"), ("train_metrics", "episode_steps"), ("eval_metrics", "travel_dist"), ("eval_metrics", "steps_taken")], "Value"),
             ("System", [("system_metrics", "buffer_size")], "Transitions"),

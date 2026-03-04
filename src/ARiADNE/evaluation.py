@@ -189,7 +189,13 @@ def evaluate_policy(
         forced_map_path = None
         if benchmark_maps:
             forced_map_path = benchmark_maps[episode_offset % len(benchmark_maps)]
-        env = Env(episode_id, plot=False, forced_map_path=forced_map_path)
+        env = Env(
+            episode_id,
+            plot=False,
+            forced_map_path=forced_map_path,
+            runtime_config=output_config,
+            curriculum_override=output_config.use_curriculum_in_eval,
+        )
         agent = InferenceAgent(policy_net, runtime_config=output_config, device=eval_device, plot=False)
         trajectory = [env.robot_location.copy()]
         frame_files = []
@@ -212,7 +218,7 @@ def evaluate_policy(
             steps_taken = step
             if agent.utility.sum() == 0:
                 success = True
-                reward += 20
+                reward = env.apply_terminal_bonus(reward)
             episode_return += float(reward)
             save_eval_frame(output_dir, artifact_stem, env, agent, episode_id, step, trajectory, frame_files)
             if success:

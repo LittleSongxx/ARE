@@ -68,6 +68,7 @@ class WaveletShapeTests(unittest.TestCase):
         observation = worker.robot.get_observation()
         gt_observation = worker.ground_truth_node_manager.get_ground_truth_observation(worker.env.robot_location)
         worker.save_observation(observation, gt_observation)
+        self.assertEqual(len(worker.episode_buffer), 33)
         self.assertEqual(len(worker.episode_buffer[0]), 1)
 
 

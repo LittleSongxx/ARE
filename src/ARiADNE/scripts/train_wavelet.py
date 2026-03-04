@@ -32,6 +32,10 @@ def _parse_csv_ints(value):
     return tuple(int(item.strip()) for item in str(value).split(",") if item.strip())
 
 
+def _parse_csv_strings(value):
+    return tuple(item.strip() for item in str(value).split(",") if item.strip())
+
+
 def build_runtime_config(args):
     config = RuntimeConfig()
     if args.smoke:
@@ -72,6 +76,21 @@ def build_runtime_config(args):
         "gif_frame_rate",
         "summary_window",
         "train_updates_per_iter",
+        "n_step",
+        "per_alpha",
+        "per_beta0",
+        "per_beta_steps",
+        "per_eps",
+        "entropy_target_scale",
+        "tau",
+        "policy_delay",
+        "replay_ratio",
+        "reward_info_weight",
+        "reward_dist_weight",
+        "reward_safe_weight",
+        "reward_terminal_bonus",
+        "curriculum_source",
+        "curriculum_mix_window",
         "result_bucket_episodes",
         "monitor_window",
         "monitor_snapshot_interval",
@@ -89,6 +108,7 @@ def build_runtime_config(args):
         "wavelet_attn_bias_type",
         "wavelet_attn_bias_beta",
         "wavelet_attn_bias_sigma",
+        "wavelet_attn_bias_clamp",
         "wavelet_skip_thresh",
         "wavelet_skip_utility_low",
         "wavelet_skip_max_age_steps",
@@ -106,6 +126,10 @@ def build_runtime_config(args):
         overrides["wavelet_scales"] = _parse_csv_ints(args.wavelet_scales)
     if args.wavelet_scales_auto_mults is not None:
         overrides["wavelet_scales_auto_mults"] = _parse_csv_ints(args.wavelet_scales_auto_mults)
+    if args.curriculum_milestones is not None:
+        overrides["curriculum_milestones"] = _parse_csv_ints(args.curriculum_milestones)
+    if args.curriculum_levels is not None:
+        overrides["curriculum_levels"] = _parse_csv_strings(args.curriculum_levels)
     if args.disable_training_monitor:
         overrides["enable_training_monitor"] = False
     if args.disable_auto_eval:
@@ -124,6 +148,34 @@ def build_runtime_config(args):
         overrides["use_wavelet_attn_bias"] = True
     if args.disable_wavelet_attn_bias:
         overrides["use_wavelet_attn_bias"] = False
+    if args.enable_nstep:
+        overrides["enable_nstep"] = True
+    if args.disable_nstep:
+        overrides["enable_nstep"] = False
+    if args.enable_per:
+        overrides["enable_per"] = True
+    if args.disable_per:
+        overrides["enable_per"] = False
+    if args.enable_adaptive_entropy_target:
+        overrides["enable_adaptive_entropy_target"] = True
+    if args.disable_adaptive_entropy_target:
+        overrides["enable_adaptive_entropy_target"] = False
+    if args.enable_soft_target_update:
+        overrides["enable_soft_target_update"] = True
+    if args.disable_soft_target_update:
+        overrides["enable_soft_target_update"] = False
+    if args.enable_reward_decomposition:
+        overrides["enable_reward_decomposition"] = True
+    if args.disable_reward_decomposition:
+        overrides["enable_reward_decomposition"] = False
+    if args.enable_curriculum:
+        overrides["enable_curriculum"] = True
+    if args.disable_curriculum:
+        overrides["enable_curriculum"] = False
+    if args.use_curriculum_in_eval:
+        overrides["use_curriculum_in_eval"] = True
+    if args.disable_curriculum_in_eval:
+        overrides["use_curriculum_in_eval"] = False
     if args.wavelet_attn_bias_masked_only:
         overrides["wavelet_attn_bias_apply_on_masked_edges_only"] = True
     if args.wavelet_attn_bias_all_pairs:
@@ -170,6 +222,37 @@ def parse_args():
     parser.add_argument("--gif-frame-rate", dest="gif_frame_rate", type=float)
     parser.add_argument("--summary-window", dest="summary_window", type=int)
     parser.add_argument("--train-updates-per-iter", dest="train_updates_per_iter", type=int)
+    parser.add_argument("--enable-nstep", action="store_true")
+    parser.add_argument("--disable-nstep", action="store_true")
+    parser.add_argument("--n-step", dest="n_step", type=int)
+    parser.add_argument("--enable-per", action="store_true")
+    parser.add_argument("--disable-per", action="store_true")
+    parser.add_argument("--per-alpha", dest="per_alpha", type=float)
+    parser.add_argument("--per-beta0", dest="per_beta0", type=float)
+    parser.add_argument("--per-beta-steps", dest="per_beta_steps", type=int)
+    parser.add_argument("--per-eps", dest="per_eps", type=float)
+    parser.add_argument("--enable-adaptive-entropy-target", action="store_true")
+    parser.add_argument("--disable-adaptive-entropy-target", action="store_true")
+    parser.add_argument("--entropy-target-scale", dest="entropy_target_scale", type=float)
+    parser.add_argument("--enable-soft-target-update", action="store_true")
+    parser.add_argument("--disable-soft-target-update", action="store_true")
+    parser.add_argument("--tau", dest="tau", type=float)
+    parser.add_argument("--policy-delay", dest="policy_delay", type=int)
+    parser.add_argument("--replay-ratio", dest="replay_ratio", type=float)
+    parser.add_argument("--enable-reward-decomposition", action="store_true")
+    parser.add_argument("--disable-reward-decomposition", action="store_true")
+    parser.add_argument("--reward-info-weight", dest="reward_info_weight", type=float)
+    parser.add_argument("--reward-dist-weight", dest="reward_dist_weight", type=float)
+    parser.add_argument("--reward-safe-weight", dest="reward_safe_weight", type=float)
+    parser.add_argument("--reward-terminal-bonus", dest="reward_terminal_bonus", type=float)
+    parser.add_argument("--enable-curriculum", action="store_true")
+    parser.add_argument("--disable-curriculum", action="store_true")
+    parser.add_argument("--curriculum-milestones")
+    parser.add_argument("--curriculum-levels")
+    parser.add_argument("--curriculum-source", dest="curriculum_source")
+    parser.add_argument("--curriculum-mix-window", dest="curriculum_mix_window", type=int)
+    parser.add_argument("--use-curriculum-in-eval", action="store_true")
+    parser.add_argument("--disable-curriculum-in-eval", action="store_true")
     parser.add_argument("--result-bucket-episodes", dest="result_bucket_episodes", type=int)
     parser.add_argument("--monitor-window", dest="monitor_window", type=int)
     parser.add_argument("--monitor-snapshot-interval", dest="monitor_snapshot_interval", type=int)
@@ -195,9 +278,14 @@ def parse_args():
     parser.add_argument("--wavelet-eps", dest="wavelet_eps", type=float)
     parser.add_argument("--use-wavelet-attn-bias", action="store_true")
     parser.add_argument("--disable-wavelet-attn-bias", action="store_true")
-    parser.add_argument("--wavelet-attn-bias-type", dest="wavelet_attn_bias_type", choices=("sim_exp", "neg_l1", "neg_l2"))
+    parser.add_argument(
+        "--wavelet-attn-bias-type",
+        dest="wavelet_attn_bias_type",
+        choices=("sim_exp", "neg_l1", "neg_l2", "diff", "product", "rbf"),
+    )
     parser.add_argument("--wavelet-attn-bias-beta", dest="wavelet_attn_bias_beta", type=float)
     parser.add_argument("--wavelet-attn-bias-sigma", dest="wavelet_attn_bias_sigma", type=float)
+    parser.add_argument("--wavelet-attn-bias-clamp", dest="wavelet_attn_bias_clamp", type=float)
     parser.add_argument("--wavelet-attn-bias-masked-only", action="store_true")
     parser.add_argument("--wavelet-attn-bias-all-pairs", action="store_true")
     parser.add_argument("--wavelet-skip-utility-updates", action="store_true")

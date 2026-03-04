@@ -13,6 +13,7 @@ from ARiADNE.parameter import (
     SMOKE_FOLDER_NAME,
     ensure_output_dirs,
     get_checkpoint_path,
+    get_latest_curriculum_source,
     get_latest_checkpoint_path,
     get_model_path,
     get_result_eval_path,
@@ -86,6 +87,57 @@ class ArtifactLayoutTests(unittest.TestCase):
                 latest = get_latest_checkpoint_path()
 
             self.assertEqual(latest, model_root / "2026_0303_0003" / "checkpoint.pth")
+
+    def test_curriculum_auto_source_prefers_latest_full_result(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            result_root = Path(tmpdir) / "result"
+            older = result_root / "map_difficulty" / "2026_0303_0001"
+            latest = result_root / "map_difficulty" / "2026_0303_0002"
+            smoke = result_root / "map_difficulty_smoke"
+            older.mkdir(parents=True)
+            latest.mkdir(parents=True)
+            smoke.mkdir(parents=True)
+            (older / "difficulty_manifest.json").write_text("{}")
+            (latest / "difficulty_manifest.json").write_text("{}")
+            (smoke / "difficulty_manifest.json").write_text("{}")
+
+            with patch.object(parameter, "result_path", result_root):
+                resolved = get_latest_curriculum_source()
+                config = RuntimeConfig(enable_curriculum=True, run_session="2026_0304_0001")
+
+            self.assertEqual(resolved, latest.resolve())
+            self.assertEqual(config.curriculum_source, str(latest.resolve()))
+
+    def test_curriculum_auto_source_prefers_smoke_result_for_smoke_runs(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            result_root = Path(tmpdir) / "result"
+            latest = result_root / "map_difficulty" / "2026_0303_0002"
+            smoke = result_root / "map_difficulty_smoke"
+            latest.mkdir(parents=True)
+            smoke.mkdir(parents=True)
+            (latest / "difficulty_manifest.json").write_text("{}")
+            (smoke / "difficulty_manifest.json").write_text("{}")
+
+            with patch.object(parameter, "result_path", result_root):
+                resolved = get_latest_curriculum_source(SMOKE_FOLDER_NAME)
+                config = RuntimeConfig(
+                    enable_curriculum=True,
+                    run_name=SMOKE_FOLDER_NAME,
+                    run_session="2026_0304_0001_smoke",
+                )
+
+            self.assertEqual(resolved, smoke.resolve())
+            self.assertEqual(config.curriculum_source, str(smoke.resolve()))
+
+    def test_curriculum_auto_source_raises_when_no_result_exists(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            result_root = Path(tmpdir) / "result"
+            result_root.mkdir(parents=True)
+
+            with patch.object(parameter, "result_path", result_root):
+                self.assertIsNone(get_latest_curriculum_source())
+                with self.assertRaises(ValueError):
+                    RuntimeConfig(enable_curriculum=True, run_session="2026_0304_0001")
 
     def test_resolve_resume_checkpoint_requires_normal_model_checkpoint(self):
         with tempfile.TemporaryDirectory() as tmpdir:

@@ -14,17 +14,37 @@ if __package__ in (None, ""):
     from ARiADNE.agent import Agent
     from ARiADNE.env import Env
     from ARiADNE.ground_truth_node_manager import GroundTruthNodeManager
-    from ARiADNE.parameter import EMBEDDING_DIM, RuntimeConfig, get_gifs_path, NODE_INPUT_DIM
+    from ARiADNE.parameter import EMBEDDING_DIM, GAMMA, RuntimeConfig, get_gifs_path, NODE_INPUT_DIM
+    from ARiADNE.replay_buffer import (
+        CRITIC_NEXT_OBSERVATION_SLOTS,
+        GAMMA_POW_SLOT,
+        NEXT_OBSERVATION_SLOTS,
+        N_STEP_ACTUAL_SLOT,
+        TRANSITION_FIELD_INDEX,
+        empty_episode_buffer,
+    )
     from ARiADNE.utils import build_artifact_stem, ensure_bucket_dir, finalize_episode_artifacts
 else:
     from .agent import Agent
     from .env import Env
     from .ground_truth_node_manager import GroundTruthNodeManager
-    from .parameter import EMBEDDING_DIM, RuntimeConfig, get_gifs_path, NODE_INPUT_DIM
+    from .parameter import EMBEDDING_DIM, GAMMA, RuntimeConfig, get_gifs_path, NODE_INPUT_DIM
+    from .replay_buffer import (
+        CRITIC_NEXT_OBSERVATION_SLOTS,
+        GAMMA_POW_SLOT,
+        NEXT_OBSERVATION_SLOTS,
+        N_STEP_ACTUAL_SLOT,
+        TRANSITION_FIELD_INDEX,
+        empty_episode_buffer,
+    )
     from .utils import build_artifact_stem, ensure_bucket_dir, finalize_episode_artifacts
 
 
 class Worker:
+    ACTION_SLOT = TRANSITION_FIELD_INDEX["action"]
+    REWARD_SLOT = TRANSITION_FIELD_INDEX["reward"]
+    DONE_SLOT = TRANSITION_FIELD_INDEX["done"]
+
     def __init__(
         self,
         meta_agent_id,
@@ -48,6 +68,12 @@ class Worker:
         )
         self.episode_return = 0.0
         self.episode_steps = 0
+        self.reward_component_sums = {
+            "reward_info": 0.0,
+            "reward_dist": 0.0,
+            "reward_safe": 0.0,
+            "reward_terminal": 0.0,
+        }
 
         self.env = Env(
             global_step,
@@ -55,6 +81,7 @@ class Worker:
             output_dir=self.output_dir,
             artifact_stem=self.episode_artifact_stem,
             forced_map_path=forced_map_path,
+            runtime_config=self.runtime_config,
         )
         self.robot = Agent(policy_net, runtime_config=self.runtime_config, device=self.device, plot=self.save_image)
         self.ground_truth_node_manager = GroundTruthNodeManager(
@@ -65,14 +92,63 @@ class Worker:
             plot=self.save_image,
         )
 
-        self.episode_buffer = [[] for _ in range(31)]
+        self.episode_buffer = empty_episode_buffer()
         self.perf_metrics = {}
+
+    def _accumulate_reward_components(self) -> None:
+        if not self.runtime_config.enable_reward_decomposition:
+            return
+        self.reward_component_sums["reward_info"] += float(self.env.last_reward_components.get("r_info", 0.0))
+        self.reward_component_sums["reward_dist"] += float(self.env.last_reward_components.get("r_dist", 0.0))
+        self.reward_component_sums["reward_safe"] += float(self.env.last_reward_components.get("r_safe", 0.0))
+        self.reward_component_sums["reward_terminal"] += float(self.env.last_reward_components.get("r_terminal", 0.0))
 
     @staticmethod
     def _buffer_tensor(tensor: torch.Tensor | None):
         if tensor is None:
             return None
         return tensor.detach().to("cpu")
+
+    @staticmethod
+    def apply_n_step_returns(
+        episode_buffer: list[list[torch.Tensor | None]],
+        n_step: int,
+        gamma: float,
+    ) -> list[list[torch.Tensor | None]]:
+        if n_step <= 1 or not episode_buffer or not episode_buffer[Worker.REWARD_SLOT]:
+            return episode_buffer
+
+        processed_buffer = [list(slot) for slot in episode_buffer]
+        reward_buffer = episode_buffer[Worker.REWARD_SLOT]
+        done_buffer = episode_buffer[Worker.DONE_SLOT]
+        buffer_size = len(reward_buffer)
+
+        for index in range(buffer_size):
+            reward_n = 0.0
+            done_n = 0
+            final_index = index
+            actual_steps = 0
+            available_steps = min(n_step, buffer_size - index)
+
+            for offset in range(available_steps):
+                reward_index = index + offset
+                actual_steps = offset + 1
+                reward_n += (gamma ** offset) * float(reward_buffer[reward_index].item())
+                final_index = reward_index
+                if int(done_buffer[reward_index].item()) == 1:
+                    done_n = 1
+                    break
+
+            processed_buffer[Worker.REWARD_SLOT][index] = reward_buffer[index].clone().fill_(reward_n)
+            processed_buffer[Worker.DONE_SLOT][index] = done_buffer[index].clone().fill_(done_n)
+            processed_buffer[GAMMA_POW_SLOT][index] = episode_buffer[GAMMA_POW_SLOT][index].clone().fill_(gamma ** actual_steps)
+            processed_buffer[N_STEP_ACTUAL_SLOT][index] = (
+                episode_buffer[N_STEP_ACTUAL_SLOT][index].clone().fill_(actual_steps)
+            )
+            for slot_index in NEXT_OBSERVATION_SLOTS + CRITIC_NEXT_OBSERVATION_SLOTS:
+                processed_buffer[slot_index][index] = episode_buffer[slot_index][final_index]
+
+        return processed_buffer
 
     def run_episode(self):
         done = False
@@ -100,7 +176,8 @@ class Worker:
             self.robot.update_planning_state(self.env.belief_info, self.env.robot_location)
             if self.robot.utility.sum() == 0:
                 done = True
-                reward += 20
+                reward = self.env.apply_terminal_bonus(reward)
+            self._accumulate_reward_components()
             self.episode_return += float(reward)
             self.episode_steps = i + 1
             self.save_reward_done(reward, done)
@@ -117,11 +194,22 @@ class Worker:
             if done:
                 break
 
+        if self.runtime_config.enable_nstep:
+            self.episode_buffer = self.apply_n_step_returns(
+                self.episode_buffer,
+                self.runtime_config.n_step,
+                GAMMA,
+            )
+
         self.perf_metrics["travel_dist"] = self.env.travel_dist
         self.perf_metrics["explored_rate"] = self.env.explored_rate
         self.perf_metrics["success_rate"] = done
         self.perf_metrics["episode_return"] = self.episode_return
         self.perf_metrics["episode_steps"] = self.episode_steps
+        if self.env.curriculum_level_index is not None:
+            self.perf_metrics["curriculum_level_index"] = float(self.env.curriculum_level_index)
+        if self.runtime_config.enable_reward_decomposition:
+            self.perf_metrics.update(self.reward_component_sums)
 
         if self.save_image:
             finalize_episode_artifacts(
@@ -180,13 +268,17 @@ class Worker:
         )
 
     def save_action(self, action_index):
-        self.episode_buffer[6] += self._buffer_tensor(action_index.reshape(1, 1, 1))
+        self.episode_buffer[self.ACTION_SLOT] += self._buffer_tensor(action_index.reshape(1, 1, 1))
 
     def save_reward_done(self, reward, done):
         reward_tensor = torch.tensor([reward], dtype=torch.float32, device=self.device).reshape(1, 1, 1)
         done_tensor = torch.tensor([int(done)], dtype=torch.int64, device=self.device).reshape(1, 1, 1)
-        self.episode_buffer[7] += self._buffer_tensor(reward_tensor)
-        self.episode_buffer[8] += self._buffer_tensor(done_tensor)
+        gamma_pow_tensor = torch.tensor([GAMMA], dtype=torch.float32, device=self.device).reshape(1, 1, 1)
+        n_step_actual_tensor = torch.tensor([1], dtype=torch.int64, device=self.device).reshape(1, 1, 1)
+        self.episode_buffer[self.REWARD_SLOT] += self._buffer_tensor(reward_tensor)
+        self.episode_buffer[self.DONE_SLOT] += self._buffer_tensor(done_tensor)
+        self.episode_buffer[GAMMA_POW_SLOT] += self._buffer_tensor(gamma_pow_tensor)
+        self.episode_buffer[N_STEP_ACTUAL_SLOT] += self._buffer_tensor(n_step_actual_tensor)
 
     def save_next_observations(self, observation, ground_truth_observation):
         (

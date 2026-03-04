@@ -35,6 +35,10 @@ class NodeManager:
         self.dist_to_nearest_frontier = 1e8
 
         self.last = start
+        self.utility_updates_attempted = 0
+        self.utility_updates_skipped = 0
+        self.guided_sampling_nodes_before = 0
+        self.guided_sampling_nodes_after = 0
 
     def _needs_wavelet_maps(self):
         return (
@@ -68,6 +72,7 @@ class NodeManager:
         ):
             return node_coords
 
+        self.guided_sampling_nodes_before += int(len(node_coords))
         scores = np.array(
             [wavelet_scalar_at_coords(coords, map_info, wavelet_maps) for coords in node_coords],
             dtype=np.float32,
@@ -83,7 +88,9 @@ class NodeManager:
             top_indices = np.argsort(scores)[::-1][: min(self.runtime_config.wavelet_node_min_keep, len(node_coords))]
             keep[top_indices] = True
 
-        return node_coords[keep]
+        sampled = node_coords[keep]
+        self.guided_sampling_nodes_after += int(len(sampled))
+        return sampled
 
     def _should_skip_utility_update(self, node, robot_location):
         if not self.runtime_config.wavelet_skip_utility_updates:
@@ -159,14 +166,17 @@ class NodeManager:
                 elif np.linalg.norm(
                         node.coords - robot_location) > parameter.THR_GRAPH_HARD_UPDATE and node.utility == 0:
                     pass
-                elif self._should_skip_utility_update(node, robot_location):
-                    node.steps_since_last_update += 1
-                elif np.linalg.norm(node.coords - robot_location) < parameter.THR_GRAPH_HARD_UPDATE and node.utility > 0:
-                    node.initialize_observable_frontiers(frontiers, updating_map_info)
-                    node.steps_since_last_update = 0
                 else:
-                    node.update_node_observable_frontiers(frontiers, updating_map_info, map_info, global_frontiers)
-                    node.steps_since_last_update = 0
+                    self.utility_updates_attempted += 1
+                    if self._should_skip_utility_update(node, robot_location):
+                        node.steps_since_last_update += 1
+                        self.utility_updates_skipped += 1
+                    elif np.linalg.norm(node.coords - robot_location) < parameter.THR_GRAPH_HARD_UPDATE and node.utility > 0:
+                        node.initialize_observable_frontiers(frontiers, updating_map_info)
+                        node.steps_since_last_update = 0
+                    else:
+                        node.update_node_observable_frontiers(frontiers, updating_map_info, map_info, global_frontiers)
+                        node.steps_since_last_update = 0
             all_node_list.append(node)
         t2 = time.time()
         # print("update nodes", t2 - t1)
