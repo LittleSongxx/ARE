@@ -83,10 +83,10 @@ UPDATING_MAP_SIZE = 4 * SENSOR_RANGE + 4 * NODE_RESOLUTION
 # - 500 GB system memory, but keep some margin for Ray workers and buffers
 # - Intel Xeon Gold 6342; rollouts stay CPU-only and are oversubscribed
 #   through Ray, while the learner consumes the visible GPUs via DataParallel.
-MAX_EPISODES = 15000
-MAX_EPISODE_STEP = 120
-REPLAY_SIZE = 80000
-MINIMUM_BUFFER_SIZE = 40000
+MAX_EPISODES = 12000
+MAX_EPISODE_STEP = 128
+REPLAY_SIZE = 100000
+MINIMUM_BUFFER_SIZE = 10000
 BATCH_SIZE = 2048
 LR = 1e-5
 GAMMA = 1
@@ -114,10 +114,10 @@ REWARD_SAFE_WEIGHT = 0.0
 REWARD_TERMINAL_BONUS = 20.0
 ENABLE_CURRICULUM = True
 # 两档 coarse curriculum:
-# - 0~5999: 纯 easy
-# - 6000~8999: easy/hard 混采过渡
-# - 9000+: 纯 hard
-CURRICULUM_MILESTONES = (0, 6000)
+# - 0~4999: 纯 easy
+# - 5000~7999: easy/hard 混采过渡
+# - 8000+: 纯 hard
+CURRICULUM_MILESTONES = (0, 5000)
 CURRICULUM_LEVELS = ("easy", "hard")
 CURRICULUM_SOURCE = None
 # 进入新难度阶段后的混采窗口长度；0 表示直接硬切换。
