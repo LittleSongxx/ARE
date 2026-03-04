@@ -22,7 +22,8 @@ def _auto_detect_worker_threads(num_meta_agent: int) -> int:
     """
     cpu_count = os.cpu_count() or 1
     max_concurrent = max(1, min(num_meta_agent, cpu_count))
-    return max(1, cpu_count // max_concurrent)
+    min_threads = 1 if cpu_count <= 1 else 2
+    return max(min_threads, cpu_count // max_concurrent)
 
 
 def resolve_ray_num_cpus(runtime_config: RuntimeConfig) -> int | None:
@@ -40,6 +41,12 @@ def resolve_ray_worker_num_cpus(runtime_config: RuntimeConfig) -> int:
     if runtime_config.ray_worker_num_cpus is not None:
         return max(1, int(runtime_config.ray_worker_num_cpus))
     env_override = os.environ.get("ARIADNE_RAY_WORKER_NUM_CPUS")
+    if env_override:
+        return max(1, int(env_override))
+    # Check worker_num_threads for backward compatibility.
+    if runtime_config.worker_num_threads is not None:
+        return max(1, int(runtime_config.worker_num_threads))
+    env_override = os.environ.get("ARIADNE_WORKER_NUM_THREADS")
     if env_override:
         return max(1, int(env_override))
     # Default: 1 CPU per worker so Ray can schedule many workers concurrently.

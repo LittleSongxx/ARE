@@ -9,7 +9,6 @@ import re
 
 PACKAGE_ROOT = Path(__file__).resolve().parent
 SRC_ROOT = PACKAGE_ROOT.parent
-BASELINE_ROOT = SRC_ROOT / "large-scale-DRL-exploration"
 
 
 def _resolve_maps_dir() -> Path:
@@ -19,13 +18,12 @@ def _resolve_maps_dir() -> Path:
 
     candidates = (
         PACKAGE_ROOT / "maps",
-        BASELINE_ROOT / "maps",
         SRC_ROOT / "maps",
     )
     for candidate in candidates:
         if candidate.exists():
             return candidate
-    return candidates[1]
+    return candidates[0]
 
 
 MAPS_DIR = _resolve_maps_dir()
@@ -51,6 +49,8 @@ EVAL_BENCHMARK_MAPS = (
 # save training data
 SUMMARY_WINDOW = 32
 LOAD_MODEL = False
+# The offline training server completes rollouts quickly, so reduce the
+# visualization / evaluation cadence to keep disk I/O out of the hot path.
 SAVE_IMG_GAP = 100
 GIF_FRAME_RATE = 0.3
 
@@ -78,15 +78,20 @@ UPDATING_MAP_SIZE = 4 * SENSOR_RANGE + 4 * NODE_RESOLUTION
 
 
 # training parameters
+# Server profile:
+# - 2 x A40 45 GB visible to the learner
+# - 500 GB system memory, but keep some margin for Ray workers and buffers
+# - Intel Xeon Gold 6342; rollouts stay CPU-only and are oversubscribed
+#   through Ray, while the learner consumes the visible GPUs via DataParallel.
 MAX_EPISODES = 15000
 MAX_EPISODE_STEP = 120
 REPLAY_SIZE = 80000
-MINIMUM_BUFFER_SIZE = 32768
-BATCH_SIZE = 3584
+MINIMUM_BUFFER_SIZE = 40000
+BATCH_SIZE = 2048
 LR = 1e-5
 GAMMA = 1
-NUM_META_AGENT = 63
-TRAIN_UPDATES_PER_ITER = 12
+NUM_META_AGENT = 40
+TRAIN_UPDATES_PER_ITER = 10
 
 
 # network parameters
@@ -110,45 +115,78 @@ USE_CURRENT_LOCATION_FOR_CONNECTIVITY = False
 
 
 # wavelet parameters
-USE_WAVELET_FEATURE = False
-WAVELET_FEATURE_MODE = "scalar"
-WAVELET_LOCAL_POOL = "none"
+# 是否启用小波特征。开启后，节点输入会额外携带局部纹理/边缘能量信息。
+USE_WAVELET_FEATURE = True
+# 小波特征编码方式：
+# - scalar: 单个综合强度
+# - scales: 每个尺度一个强度
+# - scales_orient: 每个尺度保留三个方向响应，信息最完整
+WAVELET_FEATURE_MODE = "scales_orient"
+# 是否对局部小波图做邻域池化，降低单点噪声。
+WAVELET_LOCAL_POOL = "mean"
+# 局部池化半径，单位为栅格数。
 WAVELET_LOCAL_POOL_RADIUS_CELLS = 1
-WAVELET_SCALES_AUTO = False
+# 是否根据地图/节点分辨率自动推导尺度。
+WAVELET_SCALES_AUTO = True
+# 手动指定的小波尺度；当自动尺度关闭时生效。
 WAVELET_SCALES = (1, 2, 4)
+# 自动尺度相对基础尺度的倍率。
 WAVELET_SCALES_AUTO_MULTS = (1, 2, 4)
-WAVELET_NORM_METHOD = "minmax"
+# 小波图归一化方式；log_percentile 对异常值更稳。
+WAVELET_NORM_METHOD = "log_percentile"
+# 百分位裁剪上限，用于抑制极端响应。
 WAVELET_CLIP_PERCENTILE = 99.0
+# 固定裁剪模式下的裁剪值；当前默认模式下仅作保留配置。
 WAVELET_FIXED_CLIP_VALUE = 1.0
+# 防止归一化除零的数值稳定项。
 WAVELET_EPS = 1e-6
 
-USE_WAVELET_ATTN_BIAS = False
+# 是否把小波相似度转成 attention bias，引导图注意力更关注结构相近节点。
+USE_WAVELET_ATTN_BIAS = True
+# bias 计算形式。
 WAVELET_ATTN_BIAS_TYPE = "sim_exp"
+# bias 衰减/放大强度。
 WAVELET_ATTN_BIAS_BETA = 0.5
+# 高斯相似度里的 sigma，越小越强调局部差异。
 WAVELET_ATTN_BIAS_SIGMA = 0.25
+# 是否只在原本被 mask 的边上施加 bias，避免改动已知连通关系。
 WAVELET_ATTN_BIAS_APPLY_ON_MASKED_EDGES_ONLY = True
 
-WAVELET_SKIP_UTILITY_UPDATES = False
+# 是否跳过变化很小的 utility 更新，减少重复计算。
+WAVELET_SKIP_UTILITY_UPDATES = True
+# 小波变化低于该阈值时可跳过更新。
 WAVELET_SKIP_THRESH = 0.2
+# 仅对 utility 不高的节点应用跳过策略，避免漏掉高价值 frontier。
 WAVELET_SKIP_UTILITY_LOW = float(MIN_UTILITY)
+# 连续最多跳过多少步后强制刷新。
 WAVELET_SKIP_MAX_AGE_STEPS = 3
+# 机器人附近半径内不跳过，保证近场决策足够及时。
 WAVELET_SKIP_NEAR_ROBOT_RADIUS = 2.0 * NODE_RESOLUTION
 
+# 是否用小波响应指导节点保留/裁剪，优先保留结构变化明显的区域。
 WAVELET_GUIDED_NODE_SAMPLING = False
+# 节点保留阈值；越高越偏向保留高响应节点。
 WAVELET_NODE_KEEP_THRESH = 0.35
+# 低响应节点的最小保留概率，避免采样过于激进。
 WAVELET_NODE_KEEP_PROB_LOW = 0.25
+# 无论如何都至少保留的节点数。
 WAVELET_NODE_MIN_KEEP = 32
+# 始终保留当前节点及其邻居，避免局部图断裂。
 WAVELET_NODE_ALWAYS_KEEP_CURRENT_AND_NEIGHBORS = True
 
-WAVELET_ADAPTIVE_DTH = False
+# 是否根据小波响应自适应调整建图距离阈值。
+WAVELET_ADAPTIVE_DTH = True
+# 自适应阈值的响应放大系数。
 WAVELET_DTH_ALPHA = 1.0
+# 自适应阈值的最大放大倍数。
 WAVELET_DTH_MAX_MULT = 2.0
 
 
 # GPU usage
 USE_GPU = False
 USE_GPU_GLOBAL = True
-NUM_GPU = 0
+# learner 默认只使用两张可见 GPU。
+NUM_GPU = 2
 
 
 _FEATURE_MODES = {"scalar", "scales", "scales_orient"}
@@ -486,20 +524,20 @@ def get_result_root() -> Path:
     return result_path
 
 
-def get_result_split(runtime_config: RuntimeConfig | None = None) -> str:
-    return "smoke" if is_smoke_run(runtime_config) else "train"
+def get_result_run_path(runtime_config: RuntimeConfig | None = None) -> Path:
+    return _append_run_session(get_result_root(), runtime_config)
 
 
 def get_result_gifs_path(runtime_config: RuntimeConfig | None = None) -> Path:
-    return _append_run_session(get_result_root() / get_result_split(runtime_config) / "gifs", runtime_config)
+    return get_result_run_path(runtime_config) / "gifs"
 
 
 def get_result_eval_path(runtime_config: RuntimeConfig | None = None) -> Path:
-    return _append_run_session(get_result_root() / get_result_split(runtime_config) / "eval", runtime_config)
+    return get_result_run_path(runtime_config) / "eval"
 
 
 def get_monitor_state_path(runtime_config: RuntimeConfig | None = None) -> Path:
-    return get_result_eval_path(runtime_config) / ".state"
+    return get_monitor_path(runtime_config) / ".state"
 
 
 def get_model_path(runtime_config: RuntimeConfig | None = None) -> Path:
@@ -507,7 +545,7 @@ def get_model_path(runtime_config: RuntimeConfig | None = None) -> Path:
 
 
 def get_train_path(runtime_config: RuntimeConfig | None = None) -> Path:
-    return _append_run_session(get_result_root() / get_result_split(runtime_config) / "tensorboard", runtime_config)
+    return get_result_run_path(runtime_config) / "train"
 
 
 def get_gifs_path(runtime_config: RuntimeConfig | None = None) -> Path:
@@ -515,7 +553,7 @@ def get_gifs_path(runtime_config: RuntimeConfig | None = None) -> Path:
 
 
 def get_monitor_path(runtime_config: RuntimeConfig | None = None) -> Path:
-    return _append_run_session(get_result_root() / get_result_split(runtime_config) / "monitor", runtime_config)
+    return get_train_path(runtime_config) / "monitor"
 
 
 def get_checkpoint_path(runtime_config: RuntimeConfig | None = None) -> Path:

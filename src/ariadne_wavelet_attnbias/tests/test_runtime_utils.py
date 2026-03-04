@@ -1,9 +1,8 @@
-import os
 import unittest
 from unittest import mock
 
-from ARiADNE.parameter import RuntimeConfig, NUM_META_AGENT
-from ARiADNE.runtime_utils import (
+from ariadne_wavelet_attnbias.parameter import RuntimeConfig, NUM_META_AGENT
+from ariadne_wavelet_attnbias.runtime_utils import (
     _auto_detect_worker_threads,
     resolve_ray_worker_num_cpus,
     resolve_worker_num_threads,
@@ -12,7 +11,7 @@ from ARiADNE.runtime_utils import (
 
 class RayWorkerConfigTests(unittest.TestCase):
     def test_driver_defaults_to_single_cpu_and_auto_threads(self):
-        """No env vars / no CLI → worker_num_cpus=1, threads auto-detected >= 2 on multi-core hosts."""
+        """No env vars / no CLI -> worker_num_cpus=1, threads auto-detected >= 2 on multi-core hosts."""
         config = RuntimeConfig()
         with mock.patch("os.cpu_count", return_value=96), mock.patch.dict("os.environ", {}, clear=True):
             self.assertEqual(resolve_ray_worker_num_cpus(config), 1)

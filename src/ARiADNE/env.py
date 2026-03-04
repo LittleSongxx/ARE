@@ -18,7 +18,7 @@ def list_map_files(map_dir: str | Path) -> list[Path]:
     if not directory.exists():
         raise FileNotFoundError(
             f"MAPS_DIR does not exist: {directory}. "
-            "Place training maps under ARiADNE/maps or set ARIADNE_MAPS_DIR."
+            "Place training maps under ARiADNE/maps or src/maps, or set ARIADNE_MAPS_DIR."
         )
     return sorted(path for path in directory.iterdir() if path.is_file())
 
@@ -72,13 +72,13 @@ class Env:
             if not MAPS_DIR.exists():
                 raise FileNotFoundError(
                     f"MAPS_DIR does not exist: {MAPS_DIR}. "
-                    "Place training maps under ARiADNE/maps or set ARIADNE_MAPS_DIR."
+                    "Place training maps under ARiADNE/maps or src/maps, or set ARIADNE_MAPS_DIR."
                 )
             map_list = sorted(path.name for path in MAPS_DIR.iterdir() if path.is_file())
             if not map_list:
                 raise FileNotFoundError(
                     f"No map files found in MAPS_DIR: {MAPS_DIR}. "
-                    "Place training maps under ARiADNE/maps or set ARIADNE_MAPS_DIR."
+                    "Place training maps under ARiADNE/maps or src/maps, or set ARIADNE_MAPS_DIR."
                 )
             map_index = episode_index % len(map_list)
             map_path = MAPS_DIR / map_list[map_index]

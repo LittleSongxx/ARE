@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from bisect import bisect_left
 from collections import defaultdict
 from pathlib import Path
 
@@ -47,8 +48,11 @@ class TrainingMonitor:
             ("Grad Norms", [("train_metrics", "policy_grad_norm"), ("train_metrics", "q_value_grad_norm")], "Norm"),
             ("Exploration / Success", [("train_metrics", "explored_rate"), ("train_metrics", "success_rate"), ("eval_metrics", "explored_rate"), ("eval_metrics", "success_rate")], "Rate"),
             ("Distance / Steps", [("train_metrics", "travel_dist"), ("train_metrics", "episode_steps"), ("eval_metrics", "travel_dist"), ("eval_metrics", "steps_taken")], "Value"),
-            ("System", [("system_metrics", "buffer_size"), ("system_metrics", "completed_episodes")], "Value"),
+            ("System", [("system_metrics", "buffer_size")], "Transitions"),
         ]
+        if any(section["episodes"] for section in self.sections.values()):
+            self._save_data()
+            self._save_plots()
 
     def update_train(self, episode: int, metrics: dict[str, object]) -> None:
         self._update_section("train_metrics", episode, metrics)
@@ -76,6 +80,7 @@ class TrainingMonitor:
             for key, values in section_data.get("history", {}).items():
                 history[key] = list(values)
             self.sections[section_name]["history"] = history
+            self._normalize_section(section_name)
 
     def _normalize_value(self, value: object) -> float | int | bool:
         if hasattr(value, "item"):
@@ -105,6 +110,26 @@ class TrainingMonitor:
         for key in list(history.keys()):
             history[key] = history[key][:trim_idx]
 
+    def _normalize_section(self, section_name: str) -> None:
+        section = self.sections[section_name]
+        episodes = [int(episode) for episode in section["episodes"]]
+        history = section["history"]
+        for key in list(history.keys()):
+            values = list(history[key])
+            if len(values) < len(episodes):
+                values.extend([None] * (len(episodes) - len(values)))
+            elif len(values) > len(episodes):
+                values = values[: len(episodes)]
+            history[key] = values
+
+        order = sorted(range(len(episodes)), key=lambda idx: (episodes[idx], idx))
+        if order != list(range(len(episodes))):
+            section["episodes"] = [episodes[idx] for idx in order]
+            for key in list(history.keys()):
+                history[key] = [history[key][idx] for idx in order]
+        else:
+            section["episodes"] = episodes
+
     def _update_section(self, section_name: str, episode: int, metrics: dict[str, object]) -> None:
         episode = int(episode)
         if section_name in self._trim_pending:
@@ -112,9 +137,19 @@ class TrainingMonitor:
             self._trim_pending.remove(section_name)
 
         section = self.sections[section_name]
-        section["episodes"].append(episode)
+        history = section["history"]
+        for key in metrics:
+            if key not in history:
+                history[key] = [None] * len(section["episodes"])
+
+        insert_idx = bisect_left(section["episodes"], episode)
+        if insert_idx == len(section["episodes"]) or section["episodes"][insert_idx] != episode:
+            section["episodes"].insert(insert_idx, episode)
+            for key in list(history.keys()):
+                history[key].insert(insert_idx, None)
+
         for key, value in metrics.items():
-            section["history"][key].append(self._normalize_value(value))
+            history[key][insert_idx] = self._normalize_value(value)
 
         self._save_data()
         self._save_plots()
@@ -127,6 +162,19 @@ class TrainingMonitor:
             start = max(0, idx - self.window_size + 1)
             smoothed.append(float(np.mean(values[start : idx + 1])))
         return smoothed
+
+    def _series_points(self, section_name: str, key: str) -> tuple[list[int], list[float]]:
+        section = self.sections[section_name]
+        episodes = []
+        values = []
+        for episode, value in zip(section["episodes"], section["history"].get(key, [])):
+            if value is None:
+                continue
+            if isinstance(value, (np.floating, float)) and np.isnan(float(value)):
+                continue
+            episodes.append(int(episode))
+            values.append(float(value))
+        return episodes, values
 
     def _save_data(self) -> None:
         payload = {"sections": {}}
@@ -150,14 +198,12 @@ class TrainingMonitor:
             ax = axes[row, col]
             has_data = False
             for section_name, key in series_list:
-                section = self.sections[section_name]
-                values = section["history"].get(key, [])
+                episodes, values = self._series_points(section_name, key)
                 if not values:
                     continue
-                episodes = section["episodes"][: len(values)]
                 smoothed = self._smooth(values)
                 label = f"{section_name.replace('_metrics', '')}:{key}"
-                ax.plot(episodes, values, alpha=0.2, linewidth=0.8)
+                ax.scatter(episodes, values, alpha=0.18, s=10)
                 ax.plot(episodes[: len(smoothed)], smoothed, linewidth=2.0, label=label)
                 has_data = True
             ax.set_title(title)

@@ -22,7 +22,8 @@ def _auto_detect_worker_threads(num_meta_agent: int) -> int:
     """
     cpu_count = os.cpu_count() or 1
     max_concurrent = max(1, min(num_meta_agent, cpu_count))
-    return max(1, cpu_count // max_concurrent)
+    min_threads = 1 if cpu_count <= 1 else 2
+    return max(min_threads, cpu_count // max_concurrent)
 
 
 def resolve_ray_num_cpus(runtime_config: RuntimeConfig) -> int | None:

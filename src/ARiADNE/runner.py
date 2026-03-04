@@ -12,12 +12,12 @@ if __package__ in (None, ""):
 
     from ARiADNE.model import PolicyNet
     from ARiADNE.parameter import EMBEDDING_DIM, RuntimeConfig, get_node_input_dim
-    from ARiADNE.runtime_utils import configure_worker_process_threads
+    from ARiADNE.runtime_utils import configure_worker_process_threads, resolve_worker_num_threads
     from ARiADNE.worker import Worker
 else:
     from .model import PolicyNet
     from .parameter import EMBEDDING_DIM, RuntimeConfig, get_node_input_dim
-    from .runtime_utils import configure_worker_process_threads
+    from .runtime_utils import configure_worker_process_threads, resolve_worker_num_threads
     from .worker import Worker
 
 
@@ -25,13 +25,23 @@ class Runner:
     def __init__(self, meta_agent_id, runtime_config: RuntimeConfig):
         self.meta_agent_id = meta_agent_id
         self.runtime_config = runtime_config
-        if runtime_config.worker_num_threads is not None:
-            configure_worker_process_threads(runtime_config.worker_num_threads)
-            torch.set_num_threads(max(int(runtime_config.worker_num_threads), 1))
+        self.worker_num_threads = resolve_worker_num_threads(runtime_config)
+        configure_worker_process_threads(self.worker_num_threads)
+        torch.set_num_threads(self.worker_num_threads)
+        if hasattr(torch, "set_num_interop_threads"):
+            try:
+                torch.set_num_interop_threads(self.worker_num_threads)
+            except RuntimeError:
+                pass
 
         self.device = torch.device("cuda") if runtime_config.use_gpu else torch.device("cpu")
         self.local_network = PolicyNet(get_node_input_dim(runtime_config), EMBEDDING_DIM)
         self.local_network.to(self.device)
+        print(
+            f"runner_init metaAgent={self.meta_agent_id} "
+            f"device={self.device.type} "
+            f"worker_num_threads={self.worker_num_threads}"
+        )
 
     def get_weights(self):
         return self.local_network.state_dict()

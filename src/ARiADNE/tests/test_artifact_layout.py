@@ -17,6 +17,8 @@ from ARiADNE.parameter import (
     get_model_path,
     get_result_eval_path,
     get_result_gifs_path,
+    get_train_path,
+    get_monitor_path,
     resolve_resume_checkpoint,
 )
 from ARiADNE.scripts.train_wavelet import build_runtime_config, parse_args
@@ -36,11 +38,23 @@ class ArtifactLayoutTests(unittest.TestCase):
 
                 self.assertTrue(get_result_gifs_path(train_config).is_dir())
                 self.assertTrue(get_result_eval_path(train_config).is_dir())
+                self.assertTrue(get_train_path(train_config).is_dir())
+                self.assertTrue(get_monitor_path(train_config).is_dir())
                 self.assertTrue(get_model_path(train_config).is_dir())
+                self.assertEqual(get_result_gifs_path(train_config), root / "result" / "2026_0303_0101" / "gifs")
+                self.assertEqual(get_result_eval_path(train_config), root / "result" / "2026_0303_0101" / "eval")
+                self.assertEqual(get_train_path(train_config), root / "result" / "2026_0303_0101" / "train")
+                self.assertEqual(get_monitor_path(train_config), root / "result" / "2026_0303_0101" / "train" / "monitor")
                 self.assertEqual(get_checkpoint_path(train_config), root / "model" / "2026_0303_0101" / "checkpoint.pth")
 
                 self.assertTrue(get_result_gifs_path(smoke_config).is_dir())
                 self.assertTrue(get_result_eval_path(smoke_config).is_dir())
+                self.assertTrue(get_train_path(smoke_config).is_dir())
+                self.assertTrue(get_monitor_path(smoke_config).is_dir())
+                self.assertEqual(get_result_gifs_path(smoke_config), root / "result" / "2026_0303_0102_smoke" / "gifs")
+                self.assertEqual(get_result_eval_path(smoke_config), root / "result" / "2026_0303_0102_smoke" / "eval")
+                self.assertEqual(get_train_path(smoke_config), root / "result" / "2026_0303_0102_smoke" / "train")
+                self.assertEqual(get_monitor_path(smoke_config), root / "result" / "2026_0303_0102_smoke" / "train" / "monitor")
                 self.assertFalse(get_model_path(smoke_config).exists())
 
     def test_artifact_paths_require_run_session(self):
