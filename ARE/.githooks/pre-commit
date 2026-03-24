@@ -1,0 +1,20 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+archive_pattern='(^|/).+\.(7z|bz2|gz|lz4|rar|tar|tgz|xz|zip|zst)$|(^|/).+\.tar\.(bz2|gz|lz4|xz|zst)$'
+
+staged_files="$(git diff --cached --name-only --diff-filter=ACMR)"
+if [[ -z "${staged_files}" ]]; then
+    exit 0
+fi
+
+blocked_files="$(printf '%s\n' "${staged_files}" | rg -N "${archive_pattern}" || true)"
+if [[ -z "${blocked_files}" ]]; then
+    exit 0
+fi
+
+printf 'pre-commit: archive/compressed files are blocked from commits.\n' >&2
+printf '%s\n' "${blocked_files}" >&2
+printf 'Remove them from the index with: git restore --staged <path>\n' >&2
+exit 1

@@ -6,7 +6,7 @@ src/DARE/
 *.pyc
 __pycache__/
 .catkin_workspace
-
+.pytest_cache/
 
 # IDE
 .vscode/
@@ -22,10 +22,37 @@ dist/
 .DS_Store
 Thumbs.db
 
-# Large files
-# */log/
-# */mesh/
-# *.jpg
-# *.png
-# *.dae
-# *.ply
+# === ARE large files ===
+
+# Build artifacts
+ARE/build/
+ARE/devel/
+
+# Dataset maps
+ARE/maps/
+ARE/src/*/maps/
+
+# Training results (contains images, logs, intermediate checkpoints)
+ARE/src/*/result/
+ARE/src/*/results/
+
+# Temp files
+ARE/diff.txt
+ARE/WPG_ROS_Planner_Migration_Prompt.docx
+ARE/offline_bundle/
+
+# Large binary files in result dirs
+*.ply
+*.pth.back
+
+# Exploration results
+exploration_results/
+
+# Vehicle simulator logs
+ARE/src/autonomous_exploration_development_environment/src/vehicle_simulator/log/
+
+# === Keep planner model checkpoints ===
+# These are explicitly tracked via git add -f:
+#   ARE/src/WPGRL-ROS-Planner/src/scripts/model/checkpoint.pth
+#   ARE/src/ARiADNE2-ROS-Planner/src/scripts/model/checkpoint.pth
+#   ARE/src/ARiADNE-ROS-Planner/src/scripts/model/checkpoint.pth

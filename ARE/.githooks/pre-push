@@ -1,0 +1,43 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+archive_pattern='(^|/).+\.(7z|bz2|gz|lz4|rar|tar|tgz|xz|zip|zst)$|(^|/).+\.tar\.(bz2|gz|lz4|xz|zst)$'
+
+has_blocked_files=0
+
+while read -r local_ref local_sha remote_ref remote_sha; do
+    if [[ -z "${local_ref}" ]]; then
+        continue
+    fi
+
+    if [[ "${local_sha}" =~ ^0+$ ]]; then
+        continue
+    fi
+
+    if [[ "${remote_sha}" =~ ^0+$ ]]; then
+        changed_files="$(git diff-tree --no-commit-id --name-only -r --diff-filter=ACMR "${local_sha}")"
+    else
+        changed_files="$(git diff --name-only --diff-filter=ACMR "${remote_sha}..${local_sha}")"
+    fi
+
+    if [[ -z "${changed_files}" ]]; then
+        continue
+    fi
+
+    blocked_files="$(printf '%s\n' "${changed_files}" | rg -N "${archive_pattern}" || true)"
+    if [[ -z "${blocked_files}" ]]; then
+        continue
+    fi
+
+    has_blocked_files=1
+    printf 'pre-push: archive/compressed files are blocked from pushes on %s -> %s.\n' "${local_ref}" "${remote_ref}" >&2
+    printf '%s\n' "${blocked_files}" >&2
+done
+
+if [[ "${has_blocked_files}" -ne 0 ]]; then
+    printf 'Remove the archive files from the commits being pushed, then retry.\n' >&2
+    exit 1
+fi
+
+exit 0
