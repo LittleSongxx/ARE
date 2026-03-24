@@ -166,5 +166,7 @@ if __name__ == '__main__':
   print("  2. 按 's' 键可随时手动保存当前图片")
   print("  3. 图片分辨率: 300 DPI")
   print("="*60 + "\n")
-  listener()
-  print("1")
+  try:
+    listener()
+  except rospy.exceptions.ROSInterruptException:
+    pass

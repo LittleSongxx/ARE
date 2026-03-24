@@ -1,11 +1,35 @@
 <launch>
+    <!-- ===== Scene / sensor ===== -->
     <arg name="base_frame" default="sensor"/>
     <arg name="sensor_range" default="20.0"/>
     <arg name="map_resolution" default="0.3"/>
     <arg name="node_resolution" default="4.0"/>
     <arg name="launch_rviz" default="true"/>
 
-    <node pkg="octomap_server" type="octomap_server_node" name="octomap" output="log">
+    <!-- ===== Device ===== -->
+    <arg name="device" default="auto"/>
+
+    <!-- ===== Graph optimisation switches ===== -->
+    <arg name="enable_graph_rarefaction" default="true"/>
+    <arg name="enable_corridor_graph_compression" default="true"/>
+    <arg name="enable_corridor_edge_pruning" default="true"/>
+
+    <!-- ===== Wavelet adaptive distance threshold ===== -->
+    <arg name="wavelet_adaptive_dth" default="true"/>
+    <arg name="wavelet_dth_alpha" default="1.0"/>
+    <arg name="wavelet_dth_max_mult" default="2.0"/>
+    <arg name="wavelet_local_map_size" default="56.0"/>
+
+    <!-- ===== Planner behaviour ===== -->
+    <arg name="enable_save_mode" default="true"/>
+    <arg name="greedy_action_selection" default="true"/>
+    <arg name="model_path" default=""/>
+
+    <!-- ===== Map pipeline: "octomap_server" (default) or "map_handler" ===== -->
+    <arg name="use_map_handler" default="false"/>
+
+    <!-- octomap_server pipeline (default for simulation) -->
+    <node pkg="octomap_server" type="octomap_server_node" name="octomap" output="log" unless="$(arg use_map_handler)">
         <remap from="cloud_in" to="sensor_scan"/>
         <remap from="projected_map" to="grid_map"/>
         <param name="frame_id" value="map"/>
@@ -13,7 +37,7 @@
         <param name="resolution" value="$(arg map_resolution)"/>
         <param name="occupancy_min_z" type="double" value="0.0"/>
         <param name="occupancy_max_z" type="double" value="1.2"/>
-        <param name="sensor_model/max_range" value="$(arg sensor_range)" />
+        <param name="sensor_model/max_range" value="$(arg sensor_range)"/>
         <param name="sensor_model/hit" value="1"/>
         <param name="sensor_model/miss" value="0.45"/>
         <param name="sensor_model/max" value="1"/>
@@ -21,8 +45,15 @@
         <param name="publish_free_space" value="true"/>
     </node>
 
+    <!-- Custom map_handler + terrain_segmentation pipeline (for real robot) -->
+    <include file="$(find wpg_rl_planner)/launch/map_handler.launch" if="$(arg use_map_handler)">
+        <arg name="sensor_range" value="$(arg sensor_range)"/>
+        <arg name="map_resolution" value="$(arg map_resolution)"/>
+    </include>
+
     <node pkg="wpg_rl_planner" type="wpg_rl_planner.py" name="wpg_rl_planner" output="screen" cwd="node">
         <remap from="projected_map" to="grid_map"/>
+        <param name="device" value="$(arg device)"/>
         <param name="publish_graph" type="bool" value="true"/>
         <param name="node_resolution" value="$(arg node_resolution)"/>
         <param name="sensor_range" value="$(arg sensor_range)"/>
@@ -34,15 +65,20 @@
         <param name="next_waypoint_threshold" value="5"/>
         <param name="hard_update_threshold" value="5.0"/>
         <param name="replanning_frequency" value="1"/>
-        <param name="enable_save_mode" value="true"/>
-        <param name="avoid_waypoint_oscillation" value="true"/>
-        <param name="enable_corridor_graph_compression" value="true"/>
-        <param name="enable_corridor_edge_pruning" value="true"/>
-        <param name="greedy_action_selection" value="true"/>
-        <param name="model_path" value=""/>
+        <param name="enable_save_mode" type="bool" value="$(arg enable_save_mode)"/>
+        <param name="avoid_waypoint_oscillation" type="bool" value="true"/>
+        <param name="enable_graph_rarefaction" type="bool" value="$(arg enable_graph_rarefaction)"/>
+        <param name="enable_corridor_graph_compression" type="bool" value="$(arg enable_corridor_graph_compression)"/>
+        <param name="enable_corridor_edge_pruning" type="bool" value="$(arg enable_corridor_edge_pruning)"/>
+        <param name="wavelet_adaptive_dth" type="bool" value="$(arg wavelet_adaptive_dth)"/>
+        <param name="wavelet_dth_alpha" type="double" value="$(arg wavelet_dth_alpha)"/>
+        <param name="wavelet_dth_max_mult" type="double" value="$(arg wavelet_dth_max_mult)"/>
+        <param name="wavelet_local_map_size" type="double" value="$(arg wavelet_local_map_size)"/>
+        <param name="greedy_action_selection" type="bool" value="$(arg greedy_action_selection)"/>
+        <param name="model_path" value="$(arg model_path)"/>
     </node>
 
-    <node pkg="tf" type="static_transform_publisher" name="link_broadcaster" args="0 0 0 0 0 0 1 vehicle base_link 100" />
+    <node pkg="tf" type="static_transform_publisher" name="link_broadcaster" args="0 0 0 0 0 0 1 vehicle base_link 100"/>
 
     <node launch-prefix="nice" pkg="rviz" type="rviz" name="wpg_rl_rviz" args="-d $(find wpg_rl_planner)/rviz/WPGRL.rviz" respawn="true" if="$(arg launch_rviz)"/>
 </launch>

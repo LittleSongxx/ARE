@@ -125,7 +125,7 @@ void odometryHandler(const nav_msgs::Odometry::ConstPtr& odom)
   vehicleY = odom->pose.pose.position.y;
   vehicleZ = odom->pose.pose.position.z;
 
-  fprintf(trajFilePtr, "%f %f %f %f %f %f %f\n", vehicleX, vehicleY, vehicleZ, roll, pitch, yaw, timeDuration);
+  if (trajFilePtr) fprintf(trajFilePtr, "%f %f %f %f %f %f %f\n", vehicleX, vehicleY, vehicleZ, roll, pitch, yaw, timeDuration);
 
   pcl::PointXYZI point;
   point.x = vehicleX;
@@ -191,7 +191,7 @@ void laserCloudHandler(const sensor_msgs::PointCloud2ConstPtr& laserCloudIn)
     exploredAreaDisplayCount = 0;
   }
 
-  fprintf(metricFilePtr, "%f %f %f %f\n", exploredVolume, travelingDis, runtime, timeDuration);
+  if (metricFilePtr) fprintf(metricFilePtr, "%f %f %f %f\n", exploredVolume, travelingDis, runtime, timeDuration);
 
   std_msgs::Float32 exploredVolumeMsg;
   exploredVolumeMsg.data = exploredVolume;
@@ -273,7 +273,13 @@ int main(int argc, char** argv)
   metricFile += "_" + timeString + ".txt";
   trajFile += "_" + timeString + ".txt";
   metricFilePtr = fopen(metricFile.c_str(), "w");
+  if (metricFilePtr == NULL) {
+    printf("\nCannot open metric file: %s\n", metricFile.c_str());
+  }
   trajFilePtr = fopen(trajFile.c_str(), "w");
+  if (trajFilePtr == NULL) {
+    printf("\nCannot open trajectory file: %s\n", trajFile.c_str());
+  }
 
   ros::Rate rate(100);
   bool status = ros::ok();
@@ -293,8 +299,8 @@ int main(int argc, char** argv)
     rate.sleep();
   }
 
-  fclose(metricFilePtr);
-  fclose(trajFilePtr);
+  if (metricFilePtr) fclose(metricFilePtr);
+  if (trajFilePtr) fclose(trajFilePtr);
 
   printf("\nExploration metrics and vehicle trajectory are saved in 'src/vehicle_simulator/log'.\n\n");
 

@@ -227,7 +227,7 @@ class Runner:
 
     def init_agent(self):
         policy_net = PolicyNet(parameter.NODE_INPUT_DIM, parameter.EMBEDDING_DIM).to(self.device)
-        model_folder = os.path.join(rospkg.RosPack().get_path('rl_planner'), 'scripts/model')
+        model_folder = os.path.join(rospkg.RosPack().get_path('ariadne2'), 'scripts/model')
         model_file = os.path.join(model_folder, self.model_file)
         policy_net.load_state_dict(torch.load(model_file, map_location=self.device,weights_only=True)['policy_model'])
 

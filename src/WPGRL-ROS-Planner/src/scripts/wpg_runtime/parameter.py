@@ -49,6 +49,21 @@ AVOID_OSCILLATION = True
 ENABLE_SAVE_MODE = True
 ENABLE_DSTARLITE = False
 
+# ============================================================
+# Graph rarefaction (key-node sparse graph)
+# ============================================================
+ENABLE_GRAPH_RAREFACTION = True
+
+# ============================================================
+# Wavelet adaptive distance threshold
+# ============================================================
+WAVELET_ADAPTIVE_DTH = True
+WAVELET_DTH_ALPHA = 1.0
+WAVELET_DTH_MAX_MULT = 2.0
+WAVELET_DTH_SCALE_MULTS = (1, 2, 4)
+WAVELET_LOCAL_MAP_SIZE = 56.0
+WAVELET_CACHE_CHANGE_RATIO_THRESH = 0.01
+
 USE_GPU = False
 USE_GPU_GLOBAL = False
 NUM_GPU = 0

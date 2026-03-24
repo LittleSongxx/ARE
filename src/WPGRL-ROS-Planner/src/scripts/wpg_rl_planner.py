@@ -34,10 +34,22 @@ from wpg_runtime.runtime_utils import (
 )
 
 
+def _detect_device(requested="auto"):
+    if requested not in ("auto", ""):
+        return requested
+    if not torch.cuda.is_available():
+        return "cpu"
+    try:
+        torch.zeros(1, device="cuda")
+        return "cuda"
+    except RuntimeError:
+        return "cpu"
+
+
 class Runner:
     def __init__(self):
         self.map_info = None
-        self.device = 'cuda' if torch.cuda.is_available() else 'cpu'
+        self.device = _detect_device(rospy.get_param('~device', 'auto'))
         self.step = 0
 
         self.publish_graph = rospy.get_param('~publish_graph', True)
@@ -59,6 +71,14 @@ class Runner:
             '~enable_corridor_graph_compression', parameter.ENABLE_CORRIDOR_GRAPH_COMPRESSION)
         parameter.ENABLE_CORRIDOR_EDGE_PRUNING = rospy.get_param(
             '~enable_corridor_edge_pruning', parameter.ENABLE_CORRIDOR_EDGE_PRUNING)
+
+        parameter.ENABLE_GRAPH_RAREFACTION = rospy.get_param(
+            '~enable_graph_rarefaction', parameter.ENABLE_GRAPH_RAREFACTION)
+        parameter.WAVELET_ADAPTIVE_DTH = rospy.get_param(
+            '~wavelet_adaptive_dth', parameter.WAVELET_ADAPTIVE_DTH)
+        parameter.WAVELET_DTH_ALPHA = rospy.get_param('~wavelet_dth_alpha', parameter.WAVELET_DTH_ALPHA)
+        parameter.WAVELET_DTH_MAX_MULT = rospy.get_param('~wavelet_dth_max_mult', parameter.WAVELET_DTH_MAX_MULT)
+        parameter.WAVELET_LOCAL_MAP_SIZE = rospy.get_param('~wavelet_local_map_size', parameter.WAVELET_LOCAL_MAP_SIZE)
 
         frequency = rospy.get_param('~replanning_frequency', 1.0)
         self.greedy = rospy.get_param('~greedy_action_selection', True)
@@ -112,6 +132,8 @@ class Runner:
         rospy.loginfo(f"  WAVELET_SCALES       = {parameter.WAVELET_SCALES}")
         rospy.loginfo(f"  CORRIDOR_COMPRESSION = {parameter.ENABLE_CORRIDOR_GRAPH_COMPRESSION}")
         rospy.loginfo(f"  CORRIDOR_EDGE_PRUNE  = {parameter.ENABLE_CORRIDOR_EDGE_PRUNING}")
+        rospy.loginfo(f"  GRAPH_RAREFACTION    = {parameter.ENABLE_GRAPH_RAREFACTION}")
+        rospy.loginfo(f"  WAVELET_ADAPTIVE_DTH = {parameter.WAVELET_ADAPTIVE_DTH}")
         rospy.loginfo(f"  DEVICE               = {self.device}")
         rospy.loginfo("=" * 50)
 
@@ -306,6 +328,8 @@ class Runner:
                     self.save_mode = True
                     rospy.logwarn("Switch to save mode")
 
+        if not self.next_waypoint_list:
+            return
         self.next_waypoint = self.next_waypoint_list.pop(0)
         self.waypoint_pub.publish(self.waypoint_wrapper(self.next_waypoint))
 

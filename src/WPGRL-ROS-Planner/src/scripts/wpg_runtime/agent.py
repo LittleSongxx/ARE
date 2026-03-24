@@ -5,6 +5,7 @@ import torch
 
 from .corridor_refinement import build_refined_adjacency_matrix
 from .node_manager import NodeManager
+from . import parameter as _param
 from .parameter import (
     CELL_SIZE,
     CORRIDOR_MAX_WIDTH,
@@ -129,14 +130,26 @@ class Agent:
         self.update_updating_map(self.location)
         self.update_frontiers()
         self.node_manager.update_graph(self.location, self.frontier, self.updating_map_info, self.map_info)
-        (
-            self.node_coords,
-            self.utility,
-            self.guidepost,
-            self.adjacent_matrix,
-            self.current_index,
-            self.neighbor_indices,
-        ) = self.update_observation()
+
+        if _param.ENABLE_GRAPH_RAREFACTION:
+            self.node_manager.get_rarefied_graph(self.location, self.map_info)
+            (
+                self.node_coords,
+                self.utility,
+                self.guidepost,
+                self.adjacent_matrix,
+                self.current_index,
+                self.neighbor_indices,
+            ) = self.update_key_node_observation()
+        else:
+            (
+                self.node_coords,
+                self.utility,
+                self.guidepost,
+                self.adjacent_matrix,
+                self.current_index,
+                self.neighbor_indices,
+            ) = self.update_observation()
 
     def update_observation(self):
         all_node_coords = []
@@ -172,6 +185,35 @@ class Agent:
         current_index = np.argwhere(node_coords_to_check == self.location[0] + self.location[1] * 1j)[0][0]
         neighbor_indices = np.argwhere(adjacent_matrix[current_index] == 0).reshape(-1)
         return all_node_coords, utility, guidepost, adjacent_matrix, current_index, neighbor_indices
+
+    def update_key_node_observation(self):
+        knd = self.node_manager.key_node_dict
+        if not knd:
+            return self.update_observation()
+
+        all_coords = np.array([np.array(k) for k in knd]).reshape(-1, 2)
+        n = all_coords.shape[0]
+        utility, guidepost = [], []
+        adj = np.ones((n, n), dtype=int)
+        lookup = all_coords[:, 0] + all_coords[:, 1] * 1j
+
+        for i, c in enumerate(all_coords):
+            kn = knd[(c[0], c[1])]
+            utility.append(kn.utility)
+            guidepost.append(kn.visited)
+            for nb in kn.neighbor_set:
+                idx = np.argwhere(lookup == nb[0] + nb[1] * 1j)
+                if idx.size > 0:
+                    adj[i, idx[0][0]] = 0
+
+        utility = np.array(utility)
+        guidepost = np.array(guidepost)
+        ci_matches = np.argwhere(lookup == self.location[0] + self.location[1] * 1j)
+        if ci_matches.size == 0:
+            return self.update_observation()
+        current_index = ci_matches[0][0]
+        neighbor_indices = np.argwhere(adj[current_index] == 0).reshape(-1)
+        return all_coords, utility, guidepost, adj, current_index, neighbor_indices
 
     def get_observation(self):
         node_coords = self.node_coords
