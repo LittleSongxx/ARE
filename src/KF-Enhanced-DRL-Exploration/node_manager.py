@@ -1,6 +1,7 @@
 import time
 import heapq
 import numpy as np
+from kalman_filter import ScalarKalmanFilter
 from utils import *
 from parameter import *
 import quads
@@ -207,9 +208,18 @@ class Node:
         self.neighbor_set.add((self.coords[0], self.coords[1]))
         self.need_update_neighbor = True
 
+        self.utility_kf = ScalarKalmanFilter(
+            initial_state=float(self.utility),
+            initial_variance=10.0,
+            process_noise=0.5,
+            measurement_noise=2.0,
+        )
+        self.predicted_utility = float(self.utility)
+
     def initialize_observable_frontiers(self, frontiers, updating_map_info):
         if len(frontiers) == 0:
             self.utility = 0
+            self._update_utility_kf()
             return set()
         else:
             observable_frontiers = set()
@@ -224,6 +234,7 @@ class Node:
             if self.utility <= MIN_UTILITY:
                 self.utility = 0
                 observable_frontiers = set()
+            self._update_utility_kf()
             return observable_frontiers
 
     def update_neighbor_nodes(self, updating_map_info, nodes_dict):
@@ -261,7 +272,6 @@ class Node:
             self.need_update_neighbor = False
 
     def update_node_observable_frontiers(self, new_frontiers, global_frontiers, updating_map_info):
-        # remove frontiers observed
         frontiers_observed = []
         for frontier in self.observable_frontiers:
             if frontier not in global_frontiers:
@@ -269,7 +279,6 @@ class Node:
         for frontier in frontiers_observed:
             self.observable_frontiers.remove(frontier)
 
-        # add new frontiers in the observable frontiers
         if len(new_frontiers) > 0:
             new_frontiers = np.array(list(new_frontiers)).reshape(-1, 2)
             dist_list = np.linalg.norm(new_frontiers - self.coords, axis=-1)
@@ -283,8 +292,20 @@ class Node:
         if self.utility <= MIN_UTILITY:
             self.utility = 0
             self.observable_frontiers = set()
+        self._update_utility_kf()
+
+    def _update_utility_kf(self):
+        """Update the Kalman filter with the current utility measurement
+        and produce a predicted utility for the next time step."""
+        self.utility_kf.update(float(self.utility))
+        pred_state, _ = self.utility_kf.predict()
+        self.predicted_utility = max(pred_state, 0.0)
+
+    def get_utility_uncertainty(self) -> float:
+        return self.utility_kf.get_uncertainty()
 
     def set_visited(self):
         self.visited = 1
         self.observable_frontiers = set()
         self.utility = 0
+        self._update_utility_kf()
