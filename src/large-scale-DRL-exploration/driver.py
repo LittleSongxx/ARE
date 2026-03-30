@@ -17,6 +17,7 @@ import torch.optim as optim
 from torch.utils.tensorboard import SummaryWriter
 
 from evaluation import evaluate_policy, get_evaluated_episodes, save_evaluation_summary, summarize_eval_results
+from kalman_filter import RewardBaselineKF
 from model import PolicyNet, QNet
 from parameter import (
     BATCH_SIZE,
@@ -126,8 +127,16 @@ class LearnerState:
     log_alpha_optimizer: optim.Optimizer
     entropy_target: float
     device: torch.device
+    reward_baseline_kf: RewardBaselineKF = None
     update_step: int = 0
     target_q_update_counter: int = 1
+
+    def __post_init__(self):
+        if self.reward_baseline_kf is None:
+            self.reward_baseline_kf = RewardBaselineKF(
+                process_noise=0.005,
+                measurement_noise=0.5,
+            )
 
 
 def _visible_gpu_count_from_env() -> int | None:
@@ -493,8 +502,12 @@ def train_step(batch: dict[str, torch.Tensor], learner_state: LearnerState) -> d
         learner_state.target_q_net2.eval()
 
     learner_state.update_step += 1
+
+    batch_reward = batch["reward"].mean().item()
+    kf_advantage = learner_state.reward_baseline_kf.update_and_normalize(batch_reward)
+
     return {
-        "reward": batch["reward"].mean().item(),
+        "reward": batch_reward,
         "value": value_prime.mean().item(),
         "policy_loss": policy_loss.item(),
         "q_value_loss": 0.5 * (q1_loss.item() + q2_loss.item()),
@@ -503,6 +516,9 @@ def train_step(batch: dict[str, torch.Tensor], learner_state: LearnerState) -> d
         "q_value_grad_norm": float(max(q1_grad_norm, q2_grad_norm)),
         "log_alpha": learner_state.log_alpha.item(),
         "alpha_loss": alpha_loss.item(),
+        "kf_reward_baseline": learner_state.reward_baseline_kf.get_baseline(),
+        "kf_reward_uncertainty": learner_state.reward_baseline_kf.get_uncertainty(),
+        "kf_advantage": kf_advantage,
     }
 
 
@@ -519,6 +535,12 @@ def write_to_tensor_board(writer: SummaryWriter, tensorboard_data: list[dict], c
     writer.add_scalar("Losses/Policy Grad Norm", metrics["policy_grad_norm"], curr_episode)
     writer.add_scalar("Losses/Q Value Grad Norm", metrics["q_value_grad_norm"], curr_episode)
     writer.add_scalar("Losses/Log Alpha", metrics["log_alpha"], curr_episode)
+    if "kf_reward_baseline" in metrics:
+        writer.add_scalar("KF/Reward Baseline", metrics["kf_reward_baseline"], curr_episode)
+    if "kf_reward_uncertainty" in metrics:
+        writer.add_scalar("KF/Reward Uncertainty", metrics["kf_reward_uncertainty"], curr_episode)
+    if "kf_advantage" in metrics:
+        writer.add_scalar("KF/Advantage", metrics["kf_advantage"], curr_episode)
     return metrics
 
 
