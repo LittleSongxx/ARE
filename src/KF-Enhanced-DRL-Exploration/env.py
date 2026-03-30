@@ -28,12 +28,16 @@ class Env:
         gifs_dir: str | Path | None = None,
         forced_map_path: str | Path | None = None,
         artifact_prefix: str | None = None,
+        position_noise_std: float = 0.0,
+        sensor_noise_prob: float = 0.0,
     ):
         self.episode_index = episode_index
         self.plot = plot
         self.gifs_dir = Path(gifs_dir) if gifs_dir is not None else Path(gifs_path)
         self.forced_map_path = Path(forced_map_path).expanduser().resolve() if forced_map_path is not None else None
         self.artifact_prefix = str(artifact_prefix or episode_index)
+        self.position_noise_std = float(position_noise_std)
+        self.sensor_noise_prob = float(sensor_noise_prob)
         self.ground_truth, self.robot_cell, self.map_path = self.import_ground_truth(episode_index)
         self.ground_truth_size = np.shape(self.ground_truth)
         self.cell_size = CELL_SIZE
@@ -82,17 +86,35 @@ class Env:
         ground_truth = ground_truth * 254 + 1
         return ground_truth, robot_cell, map_path
 
+    def _apply_position_noise(self, location: np.ndarray) -> np.ndarray:
+        """Domain randomization: add Gaussian noise to position.
+        Inspired by Sim-to-Real DRL UAV (arXiv:2303.07243)."""
+        if self.position_noise_std > 0.0:
+            noise = np.random.normal(0.0, self.position_noise_std, size=location.shape)
+            return location + noise
+        return location
+
     def update_robot_location(self, robot_location):
-        self.robot_location = robot_location
+        self.robot_location = self._apply_position_noise(robot_location)
         self.robot_cell = np.array(
             [
-                round((robot_location[0] - self.belief_origin_x) / self.cell_size),
-                round((robot_location[1] - self.belief_origin_y) / self.cell_size),
+                round((self.robot_location[0] - self.belief_origin_x) / self.cell_size),
+                round((self.robot_location[1] - self.belief_origin_y) / self.cell_size),
             ]
         )
         if self.plot:
             self.trajectory_x.append(self.robot_location[0])
             self.trajectory_y.append(self.robot_location[1])
+
+    def _apply_sensor_noise(self, belief: np.ndarray) -> np.ndarray:
+        """Domain randomization: flip random cells in the belief map.
+        Inspired by Sim-to-Real DRL UAV (arXiv:2303.07243)."""
+        if self.sensor_noise_prob > 0.0:
+            flip_mask = np.random.random(belief.shape) < self.sensor_noise_prob
+            noisy = belief.copy()
+            noisy[flip_mask & (belief == FREE)] = 127
+            return noisy
+        return belief
 
     def update_robot_belief(self):
         self.robot_belief = sensor_work(
@@ -101,6 +123,7 @@ class Env:
             self.robot_belief,
             self.ground_truth,
         )
+        self.robot_belief = self._apply_sensor_noise(self.robot_belief)
 
     def calculate_reward(self, dist):
         reward = 0

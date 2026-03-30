@@ -3,13 +3,15 @@ from __future__ import annotations
 import numpy as np
 import torch
 
+from graph_rarefaction import graph_rarefaction
+from kalman_filter import PositionKF
 from node_manager import NodeManager
 from parameter import CELL_SIZE, FRONTIER_CELL_SIZE, K_SIZE, NODE_PADDING_SIZE, NODE_RESOLUTION, SENSOR_RANGE, UPDATING_MAP_SIZE
 from utils import MapInfo, get_cell_position_from_coords, get_frontier_in_map
 
 
 class Agent:
-    def __init__(self, policy_net, device="cpu", plot=False):
+    def __init__(self, policy_net, device="cpu", plot=False, enable_position_kf=False):
         self.device = torch.device(device)
         self.policy_net = policy_net
         self.plot = plot
@@ -28,6 +30,12 @@ class Agent:
         self.current_index = None
         self.adjacent_matrix = None
         self.neighbor_indices = None
+
+        self.enable_position_kf = enable_position_kf
+        self.position_kf = PositionKF(
+            process_noise=0.01,
+            measurement_noise=0.1,
+        ) if enable_position_kf else None
 
     def _policy_device(self) -> torch.device:
         try:
@@ -54,8 +62,14 @@ class Agent:
         self.updating_map_info = self.get_updating_map(location)
 
     def update_location(self, location):
-        self.location = location
-        node = self.node_manager.nodes_dict.find(location.tolist())
+        if self.enable_position_kf and self.position_kf is not None:
+            filtered_x, filtered_y = self.position_kf.update(
+                (float(location[0]), float(location[1]))
+            )
+            self.location = np.array([filtered_x, filtered_y])
+        else:
+            self.location = location
+        node = self.node_manager.nodes_dict.find(self.location.tolist())
         if self.node_manager.nodes_dict.__len__() != 0 and node is not None:
             node.data.set_visited()
 
@@ -120,7 +134,8 @@ class Agent:
             self.neighbor_indices,
         ) = self.update_observation()
 
-    def update_observation(self):
+    def _build_dense_graph(self):
+        """Collect all nodes from the quadtree into dense arrays."""
         all_node_coords = []
         for node in self.node_manager.nodes_dict.__iter__():
             all_node_coords.append(node.data.coords)
@@ -141,9 +156,35 @@ class Agent:
 
         utility = np.array(utility)
         guidepost = np.array(guidepost)
-        current_index = np.argwhere(node_coords_to_check == self.location[0] + self.location[1] * 1j)[0][0]
+        current_index = int(
+            np.argwhere(node_coords_to_check == self.location[0] + self.location[1] * 1j)[0][0]
+        )
+        return all_node_coords, utility, guidepost, adjacent_matrix, current_index
+
+    def update_observation(self):
+        dense_coords, dense_utility, dense_guidepost, dense_adj, dense_current = (
+            self._build_dense_graph()
+        )
+
+        if dense_coords.shape[0] > NODE_PADDING_SIZE:
+            selected, sparse_adj = graph_rarefaction(
+                dense_coords, dense_utility, dense_adj, dense_current,
+                max_nodes=NODE_PADDING_SIZE - 1,
+            )
+            node_coords = dense_coords[selected]
+            utility = dense_utility[selected]
+            guidepost = dense_guidepost[selected]
+            adjacent_matrix = sparse_adj
+            current_index = int(np.argwhere(selected == dense_current)[0][0])
+        else:
+            node_coords = dense_coords
+            utility = dense_utility
+            guidepost = dense_guidepost
+            adjacent_matrix = dense_adj
+            current_index = dense_current
+
         neighbor_indices = np.argwhere(adjacent_matrix[current_index] == 0).reshape(-1)
-        return all_node_coords, utility, guidepost, adjacent_matrix, current_index, neighbor_indices
+        return node_coords, utility, guidepost, adjacent_matrix, current_index, neighbor_indices
 
     def get_observation(self):
         node_coords = self.node_coords
