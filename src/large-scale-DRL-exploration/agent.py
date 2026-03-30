@@ -3,6 +3,7 @@ from __future__ import annotations
 import numpy as np
 import torch
 
+from graph_rarefaction import graph_rarefaction
 from node_manager import NodeManager
 from parameter import CELL_SIZE, FRONTIER_CELL_SIZE, K_SIZE, NODE_PADDING_SIZE, NODE_RESOLUTION, SENSOR_RANGE, UPDATING_MAP_SIZE
 from utils import MapInfo, get_cell_position_from_coords, get_frontier_in_map
@@ -120,7 +121,8 @@ class Agent:
             self.neighbor_indices,
         ) = self.update_observation()
 
-    def update_observation(self):
+    def _build_dense_graph(self):
+        """Collect all nodes from the quadtree into dense arrays."""
         all_node_coords = []
         for node in self.node_manager.nodes_dict.__iter__():
             all_node_coords.append(node.data.coords)
@@ -141,9 +143,35 @@ class Agent:
 
         utility = np.array(utility)
         guidepost = np.array(guidepost)
-        current_index = np.argwhere(node_coords_to_check == self.location[0] + self.location[1] * 1j)[0][0]
+        current_index = int(
+            np.argwhere(node_coords_to_check == self.location[0] + self.location[1] * 1j)[0][0]
+        )
+        return all_node_coords, utility, guidepost, adjacent_matrix, current_index
+
+    def update_observation(self):
+        dense_coords, dense_utility, dense_guidepost, dense_adj, dense_current = (
+            self._build_dense_graph()
+        )
+
+        if dense_coords.shape[0] > NODE_PADDING_SIZE:
+            selected, sparse_adj = graph_rarefaction(
+                dense_coords, dense_utility, dense_adj, dense_current,
+                max_nodes=NODE_PADDING_SIZE - 1,
+            )
+            node_coords = dense_coords[selected]
+            utility = dense_utility[selected]
+            guidepost = dense_guidepost[selected]
+            adjacent_matrix = sparse_adj
+            current_index = int(np.argwhere(selected == dense_current)[0][0])
+        else:
+            node_coords = dense_coords
+            utility = dense_utility
+            guidepost = dense_guidepost
+            adjacent_matrix = dense_adj
+            current_index = dense_current
+
         neighbor_indices = np.argwhere(adjacent_matrix[current_index] == 0).reshape(-1)
-        return all_node_coords, utility, guidepost, adjacent_matrix, current_index, neighbor_indices
+        return node_coords, utility, guidepost, adjacent_matrix, current_index, neighbor_indices
 
     def get_observation(self):
         node_coords = self.node_coords
