@@ -6,12 +6,17 @@ import torch
 from graph_rarefaction import graph_rarefaction
 from kalman_filter import PositionKF
 from node_manager import NodeManager
-from parameter import CELL_SIZE, FRONTIER_CELL_SIZE, K_SIZE, NODE_PADDING_SIZE, NODE_RESOLUTION, SENSOR_RANGE, UPDATING_MAP_SIZE
+from parameter import (
+    CELL_SIZE, FRONTIER_CELL_SIZE, K_SIZE, NODE_PADDING_SIZE, NODE_RESOLUTION,
+    SENSOR_RANGE, UPDATING_MAP_SIZE,
+    ENABLE_GRAPH_RAREFACTION, ENABLE_POSITION_KF,
+    KF_POSITION_PROCESS_NOISE, KF_POSITION_MEASUREMENT_NOISE,
+)
 from utils import MapInfo, get_cell_position_from_coords, get_frontier_in_map
 
 
 class Agent:
-    def __init__(self, policy_net, device="cpu", plot=False, enable_position_kf=False):
+    def __init__(self, policy_net, device="cpu", plot=False):
         self.device = torch.device(device)
         self.policy_net = policy_net
         self.plot = plot
@@ -31,11 +36,11 @@ class Agent:
         self.adjacent_matrix = None
         self.neighbor_indices = None
 
-        self.enable_position_kf = enable_position_kf
+        self.enable_position_kf = ENABLE_POSITION_KF
         self.position_kf = PositionKF(
-            process_noise=0.01,
-            measurement_noise=0.1,
-        ) if enable_position_kf else None
+            process_noise=KF_POSITION_PROCESS_NOISE,
+            measurement_noise=KF_POSITION_MEASUREMENT_NOISE,
+        ) if self.enable_position_kf else None
 
     def _policy_device(self) -> torch.device:
         try:
@@ -166,7 +171,7 @@ class Agent:
             self._build_dense_graph()
         )
 
-        if dense_coords.shape[0] > NODE_PADDING_SIZE:
+        if ENABLE_GRAPH_RAREFACTION and dense_coords.shape[0] > NODE_PADDING_SIZE:
             selected, sparse_adj = graph_rarefaction(
                 dense_coords, dense_utility, dense_adj, dense_current,
                 max_nodes=NODE_PADDING_SIZE - 1,

@@ -7,29 +7,67 @@ import os
 import re
 
 
+# =====================================================================
+# KF-Enhanced DRL Exploration -- 可配置参数
+# 所有功能开关和可调参数集中在此，修改这里即可控制全局行为。
+# =====================================================================
+
+# -- 图稀疏化 (Graph Rarefaction) -----------------------------------
+ENABLE_GRAPH_RAREFACTION = True   # 节点数超 NODE_PADDING_SIZE 时自动稀疏化
+
+# -- KF 动态优势估计 (KRPO, arXiv:2505.07527) -----------------------
+ENABLE_KF_REWARD_BASELINE = True  # 用 KF 跟踪 reward baseline
+KF_REWARD_PROCESS_NOISE = 0.005   # reward baseline KF 过程噪声
+KF_REWARD_MEASUREMENT_NOISE = 0.5 # reward baseline KF 观测噪声
+
+# -- KF 节点 utility 预测 (KARNet, arXiv:2305.14644) ----------------
+ENABLE_KF_UTILITY_PREDICTION = True  # 每个节点用 KF 预测 utility 演化
+KF_UTILITY_INITIAL_VARIANCE = 10.0   # utility KF 初始方差
+KF_UTILITY_PROCESS_NOISE = 0.5       # utility KF 过程噪声
+KF_UTILITY_MEASUREMENT_NOISE = 2.0   # utility KF 观测噪声
+
+# -- KF 位置去噪 (Sim-to-Real, arXiv:2303.07243) -------------------
+ENABLE_POSITION_KF = False        # 用 KF 滤波机器人位置（部署时开启）
+KF_POSITION_PROCESS_NOISE = 0.01  # 位置 KF 过程噪声
+KF_POSITION_MEASUREMENT_NOISE = 0.1  # 位置 KF 观测噪声
+
+# -- Domain Randomization (Sim-to-Real, arXiv:2303.07243) -----------
+POSITION_NOISE_STD = 0.0          # 位置高斯噪声标准差（0 = 关闭）
+SENSOR_NOISE_PROB = 0.0           # 信念图随机翻转概率（0 = 关闭）
+
+# =====================================================================
+# 以下为原始参数，与 large-scale-DRL-exploration 保持一致
+# =====================================================================
+
+# saving path
 FOLDER_NAME = "kf_enhanced_drl_exploration"
 SMOKE_FOLDER_NAME = "kf_enhanced_drl_exploration_smoke"
 RUN_SESSION = ""
 
+# save training data
 SUMMARY_WINDOW = 32
 LOAD_MODEL = False
 SAVE_IMG_GAP = 100
 SAVE_MODEL_GAP = 32
 RESULT_BUCKET_EPISODES = 100
 
+# map and planning resolution
 CELL_SIZE = 0.4
 NODE_RESOLUTION = 4.0
 FRONTIER_CELL_SIZE = 2 * CELL_SIZE
 
+# map representation
 FREE = 255
 OCCUPIED = 1
 UNKNOWN = 127
 
+# sensor and utility range
 SENSOR_RANGE = 16
 UTILITY_RANGE = 0.8 * SENSOR_RANGE
 MIN_UTILITY = 2
 UPDATING_MAP_SIZE = 4 * SENSOR_RANGE + 4 * NODE_RESOLUTION
 
+# training parameters
 MAX_EPISODES = 10000
 MAX_EPISODE_STEP = 128
 REPLAY_SIZE = 10000
@@ -43,21 +81,26 @@ TARGET_Q_UPDATE_INTERVAL = 64
 POLICY_GRAD_CLIP = 100.0
 Q_GRAD_CLIP = 20000.0
 
+# network parameters
 NODE_INPUT_DIM = 4
 CRITIC_NODE_INPUT_DIM = NODE_INPUT_DIM + 1
 EMBEDDING_DIM = 128
 
+# graph parameters
 K_SIZE = 25
 NODE_PADDING_SIZE = 360
 
+# GPU usage
 USE_GPU = False
 USE_GPU_GLOBAL = True
 NUM_GPU = 0
 
+# training monitor
 ENABLE_TRAINING_MONITOR = True
 MONITOR_WINDOW = 10
 MONITOR_SNAPSHOT_INTERVAL = 10
 
+# auto evaluation
 ENABLE_AUTO_EVAL = True
 AUTO_EVAL_MAP_COUNT = 10
 AUTO_EVAL_INTERVAL = 100
@@ -165,6 +208,20 @@ ENABLE_AUTO_EVAL = _env_bool("LARGE_DRL_ENABLE_AUTO_EVAL", ENABLE_AUTO_EVAL)
 AUTO_EVAL_MAP_COUNT = _env_int("LARGE_DRL_AUTO_EVAL_MAP_COUNT", AUTO_EVAL_MAP_COUNT)
 AUTO_EVAL_INTERVAL = _env_int("LARGE_DRL_AUTO_EVAL_INTERVAL", AUTO_EVAL_INTERVAL)
 AUTO_EVAL_GREEDY = _env_bool("LARGE_DRL_AUTO_EVAL_GREEDY", AUTO_EVAL_GREEDY)
+
+ENABLE_GRAPH_RAREFACTION = _env_bool("KF_ENABLE_GRAPH_RAREFACTION", ENABLE_GRAPH_RAREFACTION)
+ENABLE_KF_REWARD_BASELINE = _env_bool("KF_ENABLE_REWARD_BASELINE", ENABLE_KF_REWARD_BASELINE)
+KF_REWARD_PROCESS_NOISE = _env_float("KF_REWARD_PROCESS_NOISE", KF_REWARD_PROCESS_NOISE)
+KF_REWARD_MEASUREMENT_NOISE = _env_float("KF_REWARD_MEASUREMENT_NOISE", KF_REWARD_MEASUREMENT_NOISE)
+ENABLE_KF_UTILITY_PREDICTION = _env_bool("KF_ENABLE_UTILITY_PREDICTION", ENABLE_KF_UTILITY_PREDICTION)
+KF_UTILITY_INITIAL_VARIANCE = _env_float("KF_UTILITY_INITIAL_VARIANCE", KF_UTILITY_INITIAL_VARIANCE)
+KF_UTILITY_PROCESS_NOISE = _env_float("KF_UTILITY_PROCESS_NOISE", KF_UTILITY_PROCESS_NOISE)
+KF_UTILITY_MEASUREMENT_NOISE = _env_float("KF_UTILITY_MEASUREMENT_NOISE", KF_UTILITY_MEASUREMENT_NOISE)
+ENABLE_POSITION_KF = _env_bool("KF_ENABLE_POSITION_KF", ENABLE_POSITION_KF)
+KF_POSITION_PROCESS_NOISE = _env_float("KF_POSITION_PROCESS_NOISE", KF_POSITION_PROCESS_NOISE)
+KF_POSITION_MEASUREMENT_NOISE = _env_float("KF_POSITION_MEASUREMENT_NOISE", KF_POSITION_MEASUREMENT_NOISE)
+POSITION_NOISE_STD = _env_float("KF_POSITION_NOISE_STD", POSITION_NOISE_STD)
+SENSOR_NOISE_PROB = _env_float("KF_SENSOR_NOISE_PROB", SENSOR_NOISE_PROB)
 
 MAPS_DIR = _resolve_maps_dir()
 
