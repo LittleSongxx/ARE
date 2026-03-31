@@ -4,6 +4,12 @@ import numpy as np
 from kalman_filter import ScalarKalmanFilter
 from utils import *
 from parameter import *
+from parameter import (
+    ENABLE_KF_UTILITY_PREDICTION,
+    KF_UTILITY_INITIAL_VARIANCE,
+    KF_UTILITY_PROCESS_NOISE,
+    KF_UTILITY_MEASUREMENT_NOISE,
+)
 import quads
 
 
@@ -208,13 +214,15 @@ class Node:
         self.neighbor_set.add((self.coords[0], self.coords[1]))
         self.need_update_neighbor = True
 
-        self.utility_kf = ScalarKalmanFilter(
-            initial_state=float(self.utility),
-            initial_variance=10.0,
-            process_noise=0.5,
-            measurement_noise=2.0,
-        )
+        self.utility_kf = None
         self.predicted_utility = float(self.utility)
+        if ENABLE_KF_UTILITY_PREDICTION:
+            self.utility_kf = ScalarKalmanFilter(
+                initial_state=float(self.utility),
+                initial_variance=KF_UTILITY_INITIAL_VARIANCE,
+                process_noise=KF_UTILITY_PROCESS_NOISE,
+                measurement_noise=KF_UTILITY_MEASUREMENT_NOISE,
+            )
 
     def initialize_observable_frontiers(self, frontiers, updating_map_info):
         if len(frontiers) == 0:
@@ -297,11 +305,16 @@ class Node:
     def _update_utility_kf(self):
         """Update the Kalman filter with the current utility measurement
         and produce a predicted utility for the next time step."""
+        if self.utility_kf is None:
+            self.predicted_utility = float(self.utility)
+            return
         self.utility_kf.update(float(self.utility))
         pred_state, _ = self.utility_kf.predict()
         self.predicted_utility = max(pred_state, 0.0)
 
     def get_utility_uncertainty(self) -> float:
+        if self.utility_kf is None:
+            return 0.0
         return self.utility_kf.get_uncertainty()
 
     def set_visited(self):

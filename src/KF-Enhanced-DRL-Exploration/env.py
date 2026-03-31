@@ -7,7 +7,10 @@ import numpy as np
 from skimage import io
 from skimage.measure import block_reduce
 
-from parameter import CELL_SIZE, FRONTIER_CELL_SIZE, FREE, MAPS_DIR, SENSOR_RANGE, UPDATING_MAP_SIZE, gifs_path
+from parameter import (
+    CELL_SIZE, FRONTIER_CELL_SIZE, FREE, MAPS_DIR, SENSOR_RANGE, UPDATING_MAP_SIZE, gifs_path,
+    POSITION_NOISE_STD, SENSOR_NOISE_PROB,
+)
 from sensor import sensor_work
 from utils import MapInfo, get_frontier_in_map
 
@@ -28,8 +31,8 @@ class Env:
         gifs_dir: str | Path | None = None,
         forced_map_path: str | Path | None = None,
         artifact_prefix: str | None = None,
-        position_noise_std: float = 0.0,
-        sensor_noise_prob: float = 0.0,
+        position_noise_std: float = POSITION_NOISE_STD,
+        sensor_noise_prob: float = SENSOR_NOISE_PROB,
     ):
         self.episode_index = episode_index
         self.plot = plot

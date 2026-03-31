@@ -20,6 +20,9 @@ from evaluation import evaluate_policy, get_evaluated_episodes, save_evaluation_
 from kalman_filter import RewardBaselineKF
 from model import PolicyNet, QNet
 from parameter import (
+    ENABLE_KF_REWARD_BASELINE,
+    KF_REWARD_PROCESS_NOISE,
+    KF_REWARD_MEASUREMENT_NOISE,
     BATCH_SIZE,
     CRITIC_NODE_INPUT_DIM,
     EMBEDDING_DIM,
@@ -132,10 +135,10 @@ class LearnerState:
     target_q_update_counter: int = 1
 
     def __post_init__(self):
-        if self.reward_baseline_kf is None:
+        if self.reward_baseline_kf is None and ENABLE_KF_REWARD_BASELINE:
             self.reward_baseline_kf = RewardBaselineKF(
-                process_noise=0.005,
-                measurement_noise=0.5,
+                process_noise=KF_REWARD_PROCESS_NOISE,
+                measurement_noise=KF_REWARD_MEASUREMENT_NOISE,
             )
 
 
@@ -504,9 +507,8 @@ def train_step(batch: dict[str, torch.Tensor], learner_state: LearnerState) -> d
     learner_state.update_step += 1
 
     batch_reward = batch["reward"].mean().item()
-    kf_advantage = learner_state.reward_baseline_kf.update_and_normalize(batch_reward)
 
-    return {
+    metrics = {
         "reward": batch_reward,
         "value": value_prime.mean().item(),
         "policy_loss": policy_loss.item(),
@@ -516,10 +518,15 @@ def train_step(batch: dict[str, torch.Tensor], learner_state: LearnerState) -> d
         "q_value_grad_norm": float(max(q1_grad_norm, q2_grad_norm)),
         "log_alpha": learner_state.log_alpha.item(),
         "alpha_loss": alpha_loss.item(),
-        "kf_reward_baseline": learner_state.reward_baseline_kf.get_baseline(),
-        "kf_reward_uncertainty": learner_state.reward_baseline_kf.get_uncertainty(),
-        "kf_advantage": kf_advantage,
     }
+
+    if learner_state.reward_baseline_kf is not None:
+        kf_advantage = learner_state.reward_baseline_kf.update_and_normalize(batch_reward)
+        metrics["kf_reward_baseline"] = learner_state.reward_baseline_kf.get_baseline()
+        metrics["kf_reward_uncertainty"] = learner_state.reward_baseline_kf.get_uncertainty()
+        metrics["kf_advantage"] = kf_advantage
+
+    return metrics
 
 
 def write_to_tensor_board(writer: SummaryWriter, tensorboard_data: list[dict], curr_episode: int) -> dict[str, float]:
