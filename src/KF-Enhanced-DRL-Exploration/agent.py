@@ -11,6 +11,7 @@ from parameter import (
     SENSOR_RANGE, UPDATING_MAP_SIZE,
     ENABLE_GRAPH_RAREFACTION, ENABLE_POSITION_KF,
     KF_POSITION_PROCESS_NOISE, KF_POSITION_MEASUREMENT_NOISE,
+    ENABLE_KF_EXPLORATION_BONUS, KF_EXPLORATION_BONUS_WEIGHT,
 )
 from utils import MapInfo, get_cell_position_from_coords, get_frontier_in_map
 
@@ -153,7 +154,10 @@ class Agent:
         node_coords_to_check = all_node_coords[:, 0] + all_node_coords[:, 1] * 1j
         for i, coords in enumerate(all_node_coords):
             node = self.node_manager.nodes_dict.find((coords[0], coords[1])).data
-            utility.append(node.utility)
+            node_utility = float(node.utility)
+            if ENABLE_KF_EXPLORATION_BONUS and node_utility > 0:
+                node_utility += KF_EXPLORATION_BONUS_WEIGHT * node.get_utility_uncertainty()
+            utility.append(node_utility)
             guidepost.append(node.visited)
             for neighbor in node.neighbor_set:
                 index = np.argwhere(node_coords_to_check == neighbor[0] + neighbor[1] * 1j)[0][0]
