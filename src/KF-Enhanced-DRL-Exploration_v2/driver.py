@@ -17,7 +17,7 @@ import torch.optim as optim
 from torch.utils.tensorboard import SummaryWriter
 
 from evaluation import evaluate_policy, get_evaluated_episodes, save_evaluation_summary, summarize_eval_results
-from kalman_filter import RewardBaselineKF
+from kalman_filter import RewardBaselineKF, ScalarKalmanFilter
 from model import PolicyNet, QNet
 from parameter import (
     ENABLE_KF_REWARD_BASELINE,
@@ -26,6 +26,8 @@ from parameter import (
     ENABLE_KF_TARGET_SOFT_UPDATE,
     KF_TARGET_TAU,
     ENABLE_SUCCESSOR_FEATURES,
+    SF_KF_PROCESS_NOISE,
+    SF_KF_MEASUREMENT_NOISE,
     BATCH_SIZE,
     CRITIC_NODE_INPUT_DIM,
     EMBEDDING_DIM,
@@ -134,6 +136,8 @@ class LearnerState:
     entropy_target: float
     device: torch.device
     reward_baseline_kf: RewardBaselineKF = None
+    sf_reward_optimizer: optim.Optimizer | None = None
+    sf_reward_kf: ScalarKalmanFilter | None = None
     update_step: int = 0
     target_q_update_counter: int = 1
 
@@ -142,6 +146,17 @@ class LearnerState:
             self.reward_baseline_kf = RewardBaselineKF(
                 process_noise=KF_REWARD_PROCESS_NOISE,
                 measurement_noise=KF_REWARD_MEASUREMENT_NOISE,
+            )
+        if self.sf_reward_optimizer is None and ENABLE_SUCCESSOR_FEATURES:
+            reward_head = getattr(self.q_net1, 'reward_head', None)
+            if reward_head is not None:
+                self.sf_reward_optimizer = optim.Adam(reward_head.parameters(), lr=LR)
+        if self.sf_reward_kf is None and ENABLE_SUCCESSOR_FEATURES:
+            self.sf_reward_kf = ScalarKalmanFilter(
+                initial_state=0.0,
+                initial_variance=1.0,
+                process_noise=SF_KF_PROCESS_NOISE,
+                measurement_noise=SF_KF_MEASUREMENT_NOISE,
             )
 
 
@@ -465,7 +480,11 @@ def train_step(batch: dict[str, torch.Tensor], learner_state: LearnerState) -> d
             * (next_q_values - learner_state.log_alpha.exp() * next_logp.unsqueeze(2)),
             dim=1,
         ).unsqueeze(1)
-        target_q = batch["reward"] + GAMMA * (1 - batch["done"]) * value_prime
+        reward_for_target = batch["reward"]
+        if learner_state.reward_baseline_kf is not None:
+            kf_baseline = learner_state.reward_baseline_kf.get_baseline()
+            reward_for_target = batch["reward"] - kf_baseline
+        target_q = reward_for_target + GAMMA * (1 - batch["done"]) * value_prime
 
     mse_loss = nn.MSELoss()
 
@@ -539,16 +558,28 @@ def train_step(batch: dict[str, torch.Tensor], learner_state: LearnerState) -> d
     if ENABLE_SUCCESSOR_FEATURES:
         q1_sf = learner_state.q_net1.get_successor_features()
         if q1_sf is not None:
-            sf_reward_pred = learner_state.q_net1.predict_reward_from_sf(q1_sf.detach())
             current_idx = batch["critic_current_index"]
             embedding_dim_sf = q1_sf.size(-1)
             current_sf = torch.gather(q1_sf, 1, current_idx.repeat(1, 1, embedding_dim_sf))
             current_reward_pred = learner_state.q_net1.predict_reward_from_sf(current_sf.detach())
-            sf_reward_loss = nn.MSELoss()(current_reward_pred, batch["reward"].detach())
-            learner_state.q_net1_optimizer.zero_grad()
-            sf_reward_loss.backward()
-            learner_state.q_net1_optimizer.step()
-            metrics["sf_reward_loss"] = sf_reward_loss.item()
+            sf_reward_loss_raw = nn.MSELoss()(current_reward_pred, batch["reward"].detach())
+            sf_reward_loss = sf_reward_loss_raw
+            if learner_state.sf_reward_kf is not None:
+                sf_loss_val = sf_reward_loss_raw.item()
+                learner_state.sf_reward_kf.update(sf_loss_val)
+                sf_kf_baseline = max(learner_state.sf_reward_kf.get_state(), 1e-6)
+                sf_kf_uncertainty = learner_state.sf_reward_kf.get_uncertainty()
+                relative_uncertainty = min(sf_kf_uncertainty / sf_kf_baseline, 2.0)
+                sf_loss_weight = 1.0 + relative_uncertainty
+                sf_reward_loss = sf_reward_loss_raw * sf_loss_weight
+                metrics["sf_kf_loss_weight"] = sf_loss_weight
+                metrics["sf_kf_uncertainty"] = sf_kf_uncertainty
+                metrics["sf_kf_baseline"] = learner_state.sf_reward_kf.get_state()
+            if learner_state.sf_reward_optimizer is not None:
+                learner_state.sf_reward_optimizer.zero_grad()
+                sf_reward_loss.backward()
+                learner_state.sf_reward_optimizer.step()
+            metrics["sf_reward_loss"] = sf_reward_loss_raw.item()
 
     return metrics
 
@@ -574,6 +605,10 @@ def write_to_tensor_board(writer: SummaryWriter, tensorboard_data: list[dict], c
         writer.add_scalar("KF/Advantage", metrics["kf_advantage"], curr_episode)
     if "sf_reward_loss" in metrics:
         writer.add_scalar("SF/Reward Prediction Loss", metrics["sf_reward_loss"], curr_episode)
+    if "sf_kf_loss_weight" in metrics:
+        writer.add_scalar("SF/KF Loss Weight", metrics["sf_kf_loss_weight"], curr_episode)
+    if "sf_kf_uncertainty" in metrics:
+        writer.add_scalar("SF/KF Uncertainty", metrics["sf_kf_uncertainty"], curr_episode)
     return metrics
 
 

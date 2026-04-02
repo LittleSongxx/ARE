@@ -70,17 +70,21 @@ class ScalarKalmanFilter:
 
 
 class RewardBaselineKF:
-    """Kalman filter for dynamically estimating the reward baseline.
+    """KF-based adaptive reward normalization for SAC.
 
-    Inspired by KRPO (arXiv:2505.07527): replaces naive group-mean reward
-    baseline with KF-tracked baseline that adapts to non-stationary reward
-    distributions during training.
+    Tracks the running mean (via KF) and running variance (via EMA) of
+    batch-mean rewards.  Provides a normalization factor for dividing
+    rewards before computing target Q-values.
+
+    Key design: only normalizes by std (preserves signal direction),
+    never subtracts the mean (which would make Q-values entropy-dominated
+    under GAMMA=1.0).
     """
 
     def __init__(
         self,
-        process_noise: float = 0.005,
-        measurement_noise: float = 0.5,
+        process_noise: float = 0.01,
+        measurement_noise: float = 1.0,
     ):
         self.kf = ScalarKalmanFilter(
             initial_state=0.0,
@@ -88,24 +92,26 @@ class RewardBaselineKF:
             process_noise=process_noise,
             measurement_noise=measurement_noise,
         )
+        self._reward_sq_ema = 0.0
+        self._n_updates = 0
 
-    def update_and_normalize(self, reward: float) -> float:
-        """Update the baseline with a new reward and return the advantage.
-
-        advantage = reward - kf_estimated_baseline
-        """
-        baseline = self.kf.update(reward)
-        advantage = reward - baseline
-        uncertainty = self.kf.get_uncertainty()
-        if uncertainty > 1e-6:
-            advantage = advantage / (uncertainty + 1e-6)
-        return advantage
+    def update(self, reward: float) -> None:
+        self.kf.update(reward)
+        self._n_updates += 1
+        decay = min(0.01, 1.0 / max(self._n_updates, 1))
+        self._reward_sq_ema = (1 - decay) * self._reward_sq_ema + decay * reward * reward
 
     def get_baseline(self) -> float:
         return self.kf.get_state()
 
-    def get_uncertainty(self) -> float:
-        return self.kf.get_uncertainty()
+    def get_reward_std(self) -> float:
+        mean = self.kf.get_state()
+        var = max(self._reward_sq_ema - mean * mean, 0.0)
+        return float(np.sqrt(var)) if var > 0 else 0.0
+
+    def get_normalization_factor(self) -> float:
+        """max(reward_std, 1.0) -- floor of 1.0 prevents reward amplification."""
+        return max(self.get_reward_std(), 1.0)
 
 
 class TargetQSoftTracker:

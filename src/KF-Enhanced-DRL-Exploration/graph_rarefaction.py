@@ -221,17 +221,20 @@ def graph_rarefaction(
     adj: np.ndarray,
     current_index: int,
     max_nodes: int = 360,
+    scoring_utility: np.ndarray | None = None,
 ) -> tuple[np.ndarray, np.ndarray]:
     """Main entry point: reduce a dense exploration graph to a sparse one.
 
     Parameters
     ----------
     coords : (N, 2) array of node world coordinates
-    utility : (N,) array of node utility values
+    utility : (N,) array of node utility values (raw, used for anchor detection)
     adj : (N, N) adjacency matrix (0 = connected, 1 = not connected, convention
           matching ARiADNE / large-scale-DRL-exploration)
     current_index : index of the robot's current node
     max_nodes : maximum number of nodes to keep (NODE_PADDING_SIZE)
+    scoring_utility : optional (N,) array of smoothed utility values for
+          distance-aware pruning scoring. If None, uses *utility*.
 
     Returns
     -------
@@ -246,7 +249,8 @@ def graph_rarefaction(
 
     keep, sparse_adj = contract_chains(adj, coords, anchors)
 
-    selected = distance_aware_pruning(coords, utility, adj, keep, current_index, max_nodes)
+    pruning_utility = scoring_utility if scoring_utility is not None else utility
+    selected = distance_aware_pruning(coords, pruning_utility, adj, keep, current_index, max_nodes)
 
     new_adj = remap_adjacency(adj, sparse_adj, selected)
 

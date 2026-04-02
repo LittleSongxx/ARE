@@ -15,29 +15,25 @@ import re
 # -- 图稀疏化 (Graph Rarefaction) -----------------------------------
 ENABLE_GRAPH_RAREFACTION = True   # 节点数超 NODE_PADDING_SIZE 时自动稀疏化
 
-# -- KF 动态优势估计 (KRPO, arXiv:2505.07527) -----------------------
-ENABLE_KF_REWARD_BASELINE = True  # 用 KF 跟踪 reward baseline
-KF_REWARD_PROCESS_NOISE = 0.005   # reward baseline KF 过程噪声
-KF_REWARD_MEASUREMENT_NOISE = 0.5 # reward baseline KF 观测噪声
+# -- KF 奖励标准差归一化 (inspired by KRPO, arXiv:2505.07527) --------
+# 用 KF 跟踪 reward 均值/方差，将 target_q 中的 reward 除以 running std。
+# 只归一化尺度，不减均值，兼容 GAMMA=1.0。
+ENABLE_KF_REWARD_BASELINE = True
+KF_REWARD_PROCESS_NOISE = 0.01    # reward KF 过程噪声（越大适应越快）
+KF_REWARD_MEASUREMENT_NOISE = 1.0 # reward KF 观测噪声（越大跟踪越平滑）
 
 # -- KF 节点 utility 预测 (KARNet, arXiv:2305.14644) ----------------
-ENABLE_KF_UTILITY_PREDICTION = True  # 每个节点用 KF 预测 utility 演化
+# 策略观测始终用原始 utility（即时准确）。
+# KF 预测值仅用于图稀疏化的距离感知剪枝评分，防止误删暂时失去 utility 的节点。
+ENABLE_KF_UTILITY_PREDICTION = True
 KF_UTILITY_INITIAL_VARIANCE = 10.0   # utility KF 初始方差
-KF_UTILITY_PROCESS_NOISE = 0.5       # utility KF 过程噪声
-KF_UTILITY_MEASUREMENT_NOISE = 2.0   # utility KF 观测噪声
+KF_UTILITY_PROCESS_NOISE = 0.3       # utility KF 过程噪声（越小预测越平滑）
+KF_UTILITY_MEASUREMENT_NOISE = 1.5   # utility KF 观测噪声（越大越信任 KF 预测）
 
 # -- KF 位置去噪 (Sim-to-Real, arXiv:2303.07243) -------------------
 ENABLE_POSITION_KF = False        # 用 KF 滤波机器人位置（部署时开启）
 KF_POSITION_PROCESS_NOISE = 0.01  # 位置 KF 过程噪声
 KF_POSITION_MEASUREMENT_NOISE = 0.1  # 位置 KF 观测噪声
-
-# -- KF 目标Q网络软更新 (LKTD, arXiv:2403.13178) -------------------
-ENABLE_KF_TARGET_SOFT_UPDATE = False  # 用 EMA 软更新替代硬拷贝（False = 原始每N步硬拷贝）
-KF_TARGET_TAU = 0.005                 # EMA 系数 tau: target = (1-tau)*target + tau*online
-
-# -- KF 不确定性 exploration bonus (LKTD, arXiv:2403.13178) ---------
-ENABLE_KF_EXPLORATION_BONUS = False   # 用节点 utility KF 不确定性作为 exploration bonus
-KF_EXPLORATION_BONUS_WEIGHT = 0.5     # bonus = weight * uncertainty（叠加到 utility 上）
 
 # -- Domain Randomization (Sim-to-Real, arXiv:2303.07243) -----------
 POSITION_NOISE_STD = 0.0          # 位置高斯噪声标准差（0 = 关闭）
@@ -70,9 +66,9 @@ OCCUPIED = 1
 UNKNOWN = 127
 
 # sensor and utility range
-SENSOR_RANGE = 16
+SENSOR_RANGE = 20
 UTILITY_RANGE = 0.8 * SENSOR_RANGE
-MIN_UTILITY = 2
+MIN_UTILITY = 3
 UPDATING_MAP_SIZE = 4 * SENSOR_RANGE + 4 * NODE_RESOLUTION
 
 # training parameters
@@ -80,11 +76,11 @@ MAX_EPISODES = 10000
 MAX_EPISODE_STEP = 128
 REPLAY_SIZE = 10000
 MINIMUM_BUFFER_SIZE = 2000
-BATCH_SIZE = 128
-LR = 1e-5
+BATCH_SIZE = 512
+LR = 3e-5
 GAMMA = 1.0
 NUM_META_AGENT = 16
-TRAIN_UPDATES_PER_ITER = 8
+TRAIN_UPDATES_PER_ITER = 10
 TARGET_Q_UPDATE_INTERVAL = 64
 POLICY_GRAD_CLIP = 100.0
 Q_GRAD_CLIP = 20000.0
@@ -101,7 +97,7 @@ NODE_PADDING_SIZE = 360
 # GPU usage
 USE_GPU = False
 USE_GPU_GLOBAL = True
-NUM_GPU = 0
+NUM_GPU = 3
 
 # training monitor
 ENABLE_TRAINING_MONITOR = True
@@ -228,10 +224,6 @@ KF_UTILITY_MEASUREMENT_NOISE = _env_float("KF_UTILITY_MEASUREMENT_NOISE", KF_UTI
 ENABLE_POSITION_KF = _env_bool("KF_ENABLE_POSITION_KF", ENABLE_POSITION_KF)
 KF_POSITION_PROCESS_NOISE = _env_float("KF_POSITION_PROCESS_NOISE", KF_POSITION_PROCESS_NOISE)
 KF_POSITION_MEASUREMENT_NOISE = _env_float("KF_POSITION_MEASUREMENT_NOISE", KF_POSITION_MEASUREMENT_NOISE)
-ENABLE_KF_TARGET_SOFT_UPDATE = _env_bool("KF_ENABLE_TARGET_SOFT_UPDATE", ENABLE_KF_TARGET_SOFT_UPDATE)
-KF_TARGET_TAU = _env_float("KF_TARGET_TAU", KF_TARGET_TAU)
-ENABLE_KF_EXPLORATION_BONUS = _env_bool("KF_ENABLE_EXPLORATION_BONUS", ENABLE_KF_EXPLORATION_BONUS)
-KF_EXPLORATION_BONUS_WEIGHT = _env_float("KF_EXPLORATION_BONUS_WEIGHT", KF_EXPLORATION_BONUS_WEIGHT)
 POSITION_NOISE_STD = _env_float("KF_POSITION_NOISE_STD", POSITION_NOISE_STD)
 SENSOR_NOISE_PROB = _env_float("KF_SENSOR_NOISE_PROB", SENSOR_NOISE_PROB)
 

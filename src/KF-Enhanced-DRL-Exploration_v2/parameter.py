@@ -5,6 +5,7 @@ from datetime import datetime
 from pathlib import Path
 import os
 import re
+import warnings
 
 
 # =====================================================================
@@ -16,15 +17,15 @@ import re
 ENABLE_GRAPH_RAREFACTION = True   # 节点数超 NODE_PADDING_SIZE 时自动稀疏化
 
 # -- KF 动态优势估计 (KRPO, arXiv:2505.07527) -----------------------
-ENABLE_KF_REWARD_BASELINE = True  # 用 KF 跟踪 reward baseline
-KF_REWARD_PROCESS_NOISE = 0.005   # reward baseline KF 过程噪声
+ENABLE_KF_REWARD_BASELINE = True  # 用 KF 跟踪 reward baseline 并中心化 Q-target
+KF_REWARD_PROCESS_NOISE = 0.05   # reward baseline KF 过程噪声（适应非平稳 reward 分布）
 KF_REWARD_MEASUREMENT_NOISE = 0.5 # reward baseline KF 观测噪声
 
 # -- KF 节点 utility 预测 (KARNet, arXiv:2305.14644) ----------------
 ENABLE_KF_UTILITY_PREDICTION = True  # 每个节点用 KF 预测 utility 演化
-KF_UTILITY_INITIAL_VARIANCE = 10.0   # utility KF 初始方差
-KF_UTILITY_PROCESS_NOISE = 0.5       # utility KF 过程噪声
-KF_UTILITY_MEASUREMENT_NOISE = 2.0   # utility KF 观测噪声
+KF_UTILITY_INITIAL_VARIANCE = 5.0    # utility KF 初始方差
+KF_UTILITY_PROCESS_NOISE = 0.1       # utility KF 过程噪声
+KF_UTILITY_MEASUREMENT_NOISE = 0.5   # utility KF 观测噪声（仿真中 utility 计数为精确值）
 
 # -- KF 位置去噪 (Sim-to-Real, arXiv:2303.07243) -------------------
 ENABLE_POSITION_KF = False        # 用 KF 滤波机器人位置（部署时开启）
@@ -32,19 +33,19 @@ KF_POSITION_PROCESS_NOISE = 0.01  # 位置 KF 过程噪声
 KF_POSITION_MEASUREMENT_NOISE = 0.1  # 位置 KF 观测噪声
 
 # -- KF 目标Q网络软更新 (LKTD, arXiv:2403.13178) -------------------
-ENABLE_KF_TARGET_SOFT_UPDATE = False  # 用 EMA 软更新替代硬拷贝（False = 原始每N步硬拷贝）
+ENABLE_KF_TARGET_SOFT_UPDATE = True  # 用 EMA 软更新替代硬拷贝（False = 原始每N步硬拷贝）
 KF_TARGET_TAU = 0.005                 # EMA 系数 tau: target = (1-tau)*target + tau*online
 
 # -- KF 不确定性 exploration bonus (LKTD, arXiv:2403.13178) ---------
-ENABLE_KF_EXPLORATION_BONUS = False   # 用节点 utility KF 不确定性作为 exploration bonus
-KF_EXPLORATION_BONUS_WEIGHT = 0.5     # bonus = weight * uncertainty（叠加到 utility 上）
+ENABLE_KF_EXPLORATION_BONUS = True   # 用节点 utility KF 不确定性作为 exploration bonus
+KF_EXPLORATION_BONUS_WEIGHT = 1.0     # bonus = weight * uncertainty（叠加到 utility 上）
 
 # -- Successor Feature 跨环境迁移 (MB-SF RL, arXiv:2310.10818) ------
-ENABLE_SUCCESSOR_FEATURES = False     # 启用 SF 分解（开启后 checkpoint 不兼容旧模型）
-SF_FEATURE_DIM = 96                   # successor feature 维度（EMBEDDING_DIM 中分出）
+ENABLE_SUCCESSOR_FEATURES = True      # 启用 SF 分解（开启后 checkpoint 不兼容旧模型）
+SF_FEATURE_DIM = 32                   # successor feature 维度（低秩瓶颈，避免损害表征能力）
 SF_REWARD_HEAD_DIM = 32               # reward weight 头维度
-SF_KF_PROCESS_NOISE = 0.01            # SF 迁移时 KF 过程噪声
-SF_KF_MEASUREMENT_NOISE = 0.1         # SF 迁移时 KF 观测噪声
+SF_KF_PROCESS_NOISE = 0.01            # SF 迁移 KF 过程噪声（跟踪 reward 预测误差变化速率）
+SF_KF_MEASUREMENT_NOISE = 0.1         # SF 迁移 KF 观测噪声（reward 预测 loss 的噪声水平）
 
 # -- Domain Randomization (Sim-to-Real, arXiv:2303.07243) -----------
 POSITION_NOISE_STD = 0.0          # 位置高斯噪声标准差（0 = 关闭）
@@ -60,10 +61,10 @@ SMOKE_FOLDER_NAME = "kf_enhanced_drl_exploration_v2_smoke"
 RUN_SESSION = ""
 
 # save training data
-SUMMARY_WINDOW = 32
+SUMMARY_WINDOW = 100
 LOAD_MODEL = False
 SAVE_IMG_GAP = 100
-SAVE_MODEL_GAP = 32
+SAVE_MODEL_GAP = 100
 RESULT_BUCKET_EPISODES = 100
 
 # map and planning resolution
@@ -77,21 +78,21 @@ OCCUPIED = 1
 UNKNOWN = 127
 
 # sensor and utility range
-SENSOR_RANGE = 16
+SENSOR_RANGE = 20
 UTILITY_RANGE = 0.8 * SENSOR_RANGE
-MIN_UTILITY = 2
+MIN_UTILITY = 3
 UPDATING_MAP_SIZE = 4 * SENSOR_RANGE + 4 * NODE_RESOLUTION
 
 # training parameters
 MAX_EPISODES = 10000
 MAX_EPISODE_STEP = 128
-REPLAY_SIZE = 10000
-MINIMUM_BUFFER_SIZE = 2000
-BATCH_SIZE = 128
-LR = 1e-5
+REPLAY_SIZE = 80000
+MINIMUM_BUFFER_SIZE = 8000
+BATCH_SIZE = 512
+LR = 3e-5
 GAMMA = 1.0
 NUM_META_AGENT = 16
-TRAIN_UPDATES_PER_ITER = 8
+TRAIN_UPDATES_PER_ITER = 10
 TARGET_Q_UPDATE_INTERVAL = 64
 POLICY_GRAD_CLIP = 100.0
 Q_GRAD_CLIP = 20000.0
@@ -108,7 +109,7 @@ NODE_PADDING_SIZE = 360
 # GPU usage
 USE_GPU = False
 USE_GPU_GLOBAL = True
-NUM_GPU = 0
+NUM_GPU = 3
 
 # training monitor
 ENABLE_TRAINING_MONITOR = True
@@ -246,6 +247,22 @@ SF_KF_PROCESS_NOISE = _env_float("KF_SF_KF_PROCESS_NOISE", SF_KF_PROCESS_NOISE)
 SF_KF_MEASUREMENT_NOISE = _env_float("KF_SF_KF_MEASUREMENT_NOISE", SF_KF_MEASUREMENT_NOISE)
 POSITION_NOISE_STD = _env_float("KF_POSITION_NOISE_STD", POSITION_NOISE_STD)
 SENSOR_NOISE_PROB = _env_float("KF_SENSOR_NOISE_PROB", SENSOR_NOISE_PROB)
+
+
+def _validate_kf_parameters():
+    if ENABLE_KF_EXPLORATION_BONUS and not ENABLE_KF_UTILITY_PREDICTION:
+        warnings.warn(
+            "ENABLE_KF_EXPLORATION_BONUS=True but ENABLE_KF_UTILITY_PREDICTION=False: "
+            "exploration bonus will always be zero"
+        )
+    if ENABLE_SUCCESSOR_FEATURES and SF_FEATURE_DIM >= EMBEDDING_DIM:
+        warnings.warn(
+            f"SF_FEATURE_DIM ({SF_FEATURE_DIM}) >= EMBEDDING_DIM ({EMBEDDING_DIM}): "
+            "SF bottleneck is not effective, consider reducing SF_FEATURE_DIM"
+        )
+
+
+_validate_kf_parameters()
 
 MAPS_DIR = _resolve_maps_dir()
 

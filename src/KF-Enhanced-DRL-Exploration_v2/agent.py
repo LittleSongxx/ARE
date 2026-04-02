@@ -12,6 +12,7 @@ from parameter import (
     ENABLE_GRAPH_RAREFACTION, ENABLE_POSITION_KF,
     KF_POSITION_PROCESS_NOISE, KF_POSITION_MEASUREMENT_NOISE,
     ENABLE_KF_EXPLORATION_BONUS, KF_EXPLORATION_BONUS_WEIGHT,
+    ENABLE_KF_UTILITY_PREDICTION,
 )
 from utils import MapInfo, get_cell_position_from_coords, get_frontier_in_map
 
@@ -154,7 +155,10 @@ class Agent:
         node_coords_to_check = all_node_coords[:, 0] + all_node_coords[:, 1] * 1j
         for i, coords in enumerate(all_node_coords):
             node = self.node_manager.nodes_dict.find((coords[0], coords[1])).data
-            node_utility = float(node.utility)
+            if ENABLE_KF_UTILITY_PREDICTION and node.utility_kf is not None:
+                node_utility = float(node.predicted_utility)
+            else:
+                node_utility = float(node.utility)
             if ENABLE_KF_EXPLORATION_BONUS and node_utility > 0:
                 node_utility += KF_EXPLORATION_BONUS_WEIGHT * node.get_utility_uncertainty()
             utility.append(node_utility)

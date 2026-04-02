@@ -23,8 +23,6 @@ from parameter import (
     ENABLE_KF_REWARD_BASELINE,
     KF_REWARD_PROCESS_NOISE,
     KF_REWARD_MEASUREMENT_NOISE,
-    ENABLE_KF_TARGET_SOFT_UPDATE,
-    KF_TARGET_TAU,
     BATCH_SIZE,
     CRITIC_NODE_INPUT_DIM,
     EMBEDDING_DIM,
@@ -464,7 +462,11 @@ def train_step(batch: dict[str, torch.Tensor], learner_state: LearnerState) -> d
             * (next_q_values - learner_state.log_alpha.exp() * next_logp.unsqueeze(2)),
             dim=1,
         ).unsqueeze(1)
-        target_q = batch["reward"] + GAMMA * (1 - batch["done"]) * value_prime
+        reward_for_target = batch["reward"]
+        if learner_state.reward_baseline_kf is not None:
+            reward_for_target = batch["reward"] / learner_state.reward_baseline_kf.get_normalization_factor()
+
+        target_q = reward_for_target + GAMMA * (1 - batch["done"]) * value_prime
 
     mse_loss = nn.MSELoss()
 
@@ -498,20 +500,13 @@ def train_step(batch: dict[str, torch.Tensor], learner_state: LearnerState) -> d
     alpha_loss.backward()
     learner_state.log_alpha_optimizer.step()
 
-    if ENABLE_KF_TARGET_SOFT_UPDATE:
-        tau = KF_TARGET_TAU
-        for p_t, p_o in zip(learner_state.target_q_net1.parameters(), learner_state.q_net1.parameters()):
-            p_t.data.mul_(1.0 - tau).add_(tau * p_o.data)
-        for p_t, p_o in zip(learner_state.target_q_net2.parameters(), learner_state.q_net2.parameters()):
-            p_t.data.mul_(1.0 - tau).add_(tau * p_o.data)
-    else:
-        learner_state.target_q_update_counter += 1
-        if learner_state.target_q_update_counter > TARGET_Q_UPDATE_INTERVAL:
-            learner_state.target_q_update_counter = 1
-            learner_state.target_q_net1.load_state_dict(learner_state.q_net1.state_dict())
-            learner_state.target_q_net2.load_state_dict(learner_state.q_net2.state_dict())
-            learner_state.target_q_net1.eval()
-            learner_state.target_q_net2.eval()
+    learner_state.target_q_update_counter += 1
+    if learner_state.target_q_update_counter > TARGET_Q_UPDATE_INTERVAL:
+        learner_state.target_q_update_counter = 1
+        learner_state.target_q_net1.load_state_dict(learner_state.q_net1.state_dict())
+        learner_state.target_q_net2.load_state_dict(learner_state.q_net2.state_dict())
+        learner_state.target_q_net1.eval()
+        learner_state.target_q_net2.eval()
 
     learner_state.update_step += 1
 
@@ -530,10 +525,10 @@ def train_step(batch: dict[str, torch.Tensor], learner_state: LearnerState) -> d
     }
 
     if learner_state.reward_baseline_kf is not None:
-        kf_advantage = learner_state.reward_baseline_kf.update_and_normalize(batch_reward)
+        learner_state.reward_baseline_kf.update(batch_reward)
         metrics["kf_reward_baseline"] = learner_state.reward_baseline_kf.get_baseline()
-        metrics["kf_reward_uncertainty"] = learner_state.reward_baseline_kf.get_uncertainty()
-        metrics["kf_advantage"] = kf_advantage
+        metrics["kf_reward_std"] = learner_state.reward_baseline_kf.get_reward_std()
+        metrics["kf_reward_norm_factor"] = learner_state.reward_baseline_kf.get_normalization_factor()
 
     return metrics
 
@@ -553,10 +548,10 @@ def write_to_tensor_board(writer: SummaryWriter, tensorboard_data: list[dict], c
     writer.add_scalar("Losses/Log Alpha", metrics["log_alpha"], curr_episode)
     if "kf_reward_baseline" in metrics:
         writer.add_scalar("KF/Reward Baseline", metrics["kf_reward_baseline"], curr_episode)
-    if "kf_reward_uncertainty" in metrics:
-        writer.add_scalar("KF/Reward Uncertainty", metrics["kf_reward_uncertainty"], curr_episode)
-    if "kf_advantage" in metrics:
-        writer.add_scalar("KF/Advantage", metrics["kf_advantage"], curr_episode)
+    if "kf_reward_std" in metrics:
+        writer.add_scalar("KF/Reward Std", metrics["kf_reward_std"], curr_episode)
+    if "kf_reward_norm_factor" in metrics:
+        writer.add_scalar("KF/Reward Norm Factor", metrics["kf_reward_norm_factor"], curr_episode)
     return metrics
 
 
