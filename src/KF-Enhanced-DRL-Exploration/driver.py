@@ -23,6 +23,8 @@ from parameter import (
     ENABLE_KF_REWARD_BASELINE,
     KF_REWARD_PROCESS_NOISE,
     KF_REWARD_MEASUREMENT_NOISE,
+    ENABLE_KF_TARGET_SOFT_UPDATE,
+    KF_TARGET_TAU,
     BATCH_SIZE,
     CRITIC_NODE_INPUT_DIM,
     EMBEDDING_DIM,
@@ -496,13 +498,20 @@ def train_step(batch: dict[str, torch.Tensor], learner_state: LearnerState) -> d
     alpha_loss.backward()
     learner_state.log_alpha_optimizer.step()
 
-    learner_state.target_q_update_counter += 1
-    if learner_state.target_q_update_counter > TARGET_Q_UPDATE_INTERVAL:
-        learner_state.target_q_update_counter = 1
-        learner_state.target_q_net1.load_state_dict(learner_state.q_net1.state_dict())
-        learner_state.target_q_net2.load_state_dict(learner_state.q_net2.state_dict())
-        learner_state.target_q_net1.eval()
-        learner_state.target_q_net2.eval()
+    if ENABLE_KF_TARGET_SOFT_UPDATE:
+        tau = KF_TARGET_TAU
+        for p_t, p_o in zip(learner_state.target_q_net1.parameters(), learner_state.q_net1.parameters()):
+            p_t.data.mul_(1.0 - tau).add_(tau * p_o.data)
+        for p_t, p_o in zip(learner_state.target_q_net2.parameters(), learner_state.q_net2.parameters()):
+            p_t.data.mul_(1.0 - tau).add_(tau * p_o.data)
+    else:
+        learner_state.target_q_update_counter += 1
+        if learner_state.target_q_update_counter > TARGET_Q_UPDATE_INTERVAL:
+            learner_state.target_q_update_counter = 1
+            learner_state.target_q_net1.load_state_dict(learner_state.q_net1.state_dict())
+            learner_state.target_q_net2.load_state_dict(learner_state.q_net2.state_dict())
+            learner_state.target_q_net1.eval()
+            learner_state.target_q_net2.eval()
 
     learner_state.update_step += 1
 
