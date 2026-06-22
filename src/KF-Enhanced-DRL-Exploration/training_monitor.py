@@ -13,7 +13,9 @@ import numpy as np
 
 
 class TrainingMonitor:
-    def __init__(self, save_dir: str | Path, window_size: int = 10, snapshot_interval: int = 10):
+    def __init__(
+        self, save_dir: str | Path, window_size: int = 10, snapshot_interval: int = 10
+    ):
         self.save_dir = Path(save_dir)
         self.save_dir.mkdir(parents=True, exist_ok=True)
         self.state_dir = self.save_dir / ".state"
@@ -44,9 +46,11 @@ class TrainingMonitor:
             (
                 "Fixed Eval Efficiency",
                 [
+                    ("eval_metrics", "distance_efficiency", "Eval dist efficiency"),
+                    ("eval_metrics", "time_efficiency", "Eval time efficiency"),
                     ("eval_metrics", "travel_dist", "Eval travel dist"),
                     ("eval_metrics", "steps_taken", "Eval steps"),
-                    ("eval_metrics", "episode_return", "Eval return"),
+                    ("eval_metrics", "mean_planning_time_ms", "Eval planning ms"),
                 ],
                 "Value",
             ),
@@ -61,8 +65,10 @@ class TrainingMonitor:
             (
                 "Train Efficiency",
                 [
+                    ("train_metrics", "distance_efficiency", "Train dist efficiency"),
                     ("train_metrics", "travel_dist", "Train travel dist"),
                     ("train_metrics", "episode_steps", "Train steps"),
+                    ("train_metrics", "mean_planning_time_ms", "Train planning ms"),
                 ],
                 "Value",
             ),
@@ -114,10 +120,15 @@ class TrainingMonitor:
             ("eval_metrics", "travel_dist"): "#1f77b4",
             ("eval_metrics", "steps_taken"): "#ff7f0e",
             ("eval_metrics", "episode_return"): "#9467bd",
+            ("eval_metrics", "distance_efficiency"): "#17becf",
+            ("eval_metrics", "time_efficiency"): "#8c564b",
+            ("eval_metrics", "mean_planning_time_ms"): "#bcbd22",
             ("train_metrics", "episode_return"): "#ff7f0e",
             ("train_metrics", "reward"): "#8c564b",
             ("train_metrics", "travel_dist"): "#1f77b4",
             ("train_metrics", "episode_steps"): "#ff7f0e",
+            ("train_metrics", "distance_efficiency"): "#17becf",
+            ("train_metrics", "mean_planning_time_ms"): "#bcbd22",
             ("train_metrics", "policy_loss"): "#1f77b4",
             ("train_metrics", "q_value_loss"): "#ff7f0e",
             ("train_metrics", "alpha_loss"): "#2ca02c",
@@ -155,7 +166,9 @@ class TrainingMonitor:
         for section_name, section_data in sections.items():
             if section_name not in self.sections:
                 continue
-            self.sections[section_name]["episodes"] = list(section_data.get("episodes", []))
+            self.sections[section_name]["episodes"] = list(
+                section_data.get("episodes", [])
+            )
             history = defaultdict(list)
             for key, values in section_data.get("history", {}).items():
                 history[key] = list(values)
@@ -212,7 +225,9 @@ class TrainingMonitor:
         else:
             section["episodes"] = episodes
 
-    def _update_section(self, section_name: str, episode: int, metrics: dict[str, object]) -> None:
+    def _update_section(
+        self, section_name: str, episode: int, metrics: dict[str, object]
+    ) -> None:
         episode = int(episode)
         if section_name in self._trim_pending:
             self._trim_section(section_name, episode)
@@ -225,7 +240,10 @@ class TrainingMonitor:
                 history[key] = [None] * len(section["episodes"])
 
         insert_idx = bisect_left(section["episodes"], episode)
-        if insert_idx == len(section["episodes"]) or section["episodes"][insert_idx] != episode:
+        if (
+            insert_idx == len(section["episodes"])
+            or section["episodes"][insert_idx] != episode
+        ):
             section["episodes"].insert(insert_idx, episode)
             for key in list(history.keys()):
                 history[key].insert(insert_idx, None)
@@ -254,7 +272,9 @@ class TrainingMonitor:
             spread.append(float(np.std(values[start : idx + 1])))
         return spread
 
-    def _series_points(self, section_name: str, key: str) -> tuple[list[int], list[float]]:
+    def _series_points(
+        self, section_name: str, key: str
+    ) -> tuple[list[int], list[float]]:
         section = self.sections[section_name]
         episodes = []
         values = []
@@ -273,7 +293,9 @@ class TrainingMonitor:
             return None
         return episodes[-1], values[-1]
 
-    def _best_point(self, section_name: str, key: str, mode: str) -> tuple[int, float] | None:
+    def _best_point(
+        self, section_name: str, key: str, mode: str
+    ) -> tuple[int, float] | None:
         episodes, values = self._series_points(section_name, key)
         if not values:
             return None
@@ -303,7 +325,9 @@ class TrainingMonitor:
 
     def _add_resume_markers(self, ax: plt.Axes, resume_markers: list[int]) -> None:
         for episode in resume_markers:
-            ax.axvline(episode, color="#7f7f7f", linestyle="--", linewidth=1.0, alpha=0.3)
+            ax.axvline(
+                episode, color="#7f7f7f", linestyle="--", linewidth=1.0, alpha=0.3
+            )
 
     def _plot_series_group(
         self,
@@ -345,9 +369,19 @@ class TrainingMonitor:
         if has_data:
             ax.legend(fontsize=8, loc="best")
         else:
-            ax.text(0.5, 0.5, empty_message, ha="center", va="center", fontsize=11, color="#666666")
+            ax.text(
+                0.5,
+                0.5,
+                empty_message,
+                ha="center",
+                va="center",
+                fontsize=11,
+                color="#666666",
+            )
 
-    def _format_summary_value(self, point: tuple[int, float] | None, precision: int = 3) -> str:
+    def _format_summary_value(
+        self, point: tuple[int, float] | None, precision: int = 3
+    ) -> str:
         if point is None:
             return "n/a"
         episode, value = point
@@ -365,7 +399,9 @@ class TrainingMonitor:
         eval_travel = self._latest_point("eval_metrics", "travel_dist")
         eval_steps = self._latest_point("eval_metrics", "steps_taken")
         best_eval_travel = self._best_point("eval_metrics", "travel_dist", mode="min")
-        best_eval_return = self._best_point("eval_metrics", "episode_return", mode="max")
+        best_eval_return = self._best_point(
+            "eval_metrics", "episode_return", mode="max"
+        )
         latest_buffer = self._latest_point("system_metrics", "buffer_size")
 
         resume_text = "none"
@@ -394,14 +430,24 @@ class TrainingMonitor:
             f"Resume markers:      {len(resume_markers)}",
             f"Resume episodes:     {resume_text}",
         ]
-        ax.text(0.02, 0.98, "\n".join(lines), ha="left", va="top", fontsize=10.5, family="monospace")
+        ax.text(
+            0.02,
+            0.98,
+            "\n".join(lines),
+            ha="left",
+            va="top",
+            fontsize=10.5,
+            family="monospace",
+        )
 
     def _save_data(self) -> None:
         payload = {"sections": {}}
         for section_name, section in self.sections.items():
             payload["sections"][section_name] = {
                 "episodes": list(section["episodes"]),
-                "history": {key: list(values) for key, values in section["history"].items()},
+                "history": {
+                    key: list(values) for key, values in section["history"].items()
+                },
             }
         self.data_file.write_text(json.dumps(payload, indent=2))
 

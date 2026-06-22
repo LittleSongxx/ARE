@@ -3,6 +3,7 @@ from __future__ import annotations
 import csv
 import json
 import re
+import time
 from pathlib import Path
 
 import matplotlib
@@ -14,10 +15,19 @@ import torch
 
 import parameter as parameter_module
 from agent import Agent
+from benchmark_metrics import SUMMARY_BENCHMARK_FIELDS, compute_benchmark_metrics
 from env import Env, list_map_files
 from ground_truth_node_manager import GroundTruthNodeManager
 from model import PolicyNet
-from parameter import EMBEDDING_DIM, MAX_EPISODE_STEP, NODE_INPUT_DIM, RuntimeConfig, get_result_eval_gifs_path, get_result_eval_path
+from parameter import (
+    EMBEDDING_DIM,
+    MAX_EPISODE_STEP,
+    NODE_INPUT_DIM,
+    RuntimeConfig,
+    get_result_eval_gifs_path,
+    get_result_eval_path,
+)
+from runtime_utils import derive_episode_seed, set_global_seeds
 from utils import ensure_episode_bucket_dir, make_gif
 
 
@@ -26,6 +36,18 @@ CORE_EVAL_METRICS = (
     ("success_rate", "Success Rate"),
     ("completion_steps", "Completion Steps"),
     ("completion_travel_dist", "Completion Travel Distance"),
+    ("distance_efficiency", "Distance Efficiency"),
+    ("time_efficiency", "Time Efficiency"),
+    ("mean_planning_time_ms", "Mean Planning Time (ms)"),
+)
+
+SUMMARY_MEAN_FIELDS = (
+    "explored_rate",
+    "travel_dist",
+    "success_rate",
+    "episode_return",
+    "steps_taken",
+    *SUMMARY_BENCHMARK_FIELDS,
 )
 
 
@@ -63,7 +85,9 @@ def get_eval_map_name(map_number: int) -> str:
     return f"map_{max(int(map_number), 1)}"
 
 
-def ensure_eval_map_dir(base_dir: str | Path, episode_number: int, map_number: int, bucket_size: int) -> Path:
+def ensure_eval_map_dir(
+    base_dir: str | Path, episode_number: int, map_number: int, bucket_size: int
+) -> Path:
     episode_dir = ensure_episode_bucket_dir(base_dir, episode_number, bucket_size)
     map_dir = episode_dir / get_eval_map_name(map_number)
     map_dir.mkdir(parents=True, exist_ok=True)
@@ -74,7 +98,9 @@ def get_eval_raw_dir(output_dir: str | Path) -> Path:
     return Path(output_dir) / "raw"
 
 
-def resolve_fixed_eval_maps(eval_map_count: int, maps_dir: str | Path | None = None) -> list[Path]:
+def resolve_fixed_eval_maps(
+    eval_map_count: int, maps_dir: str | Path | None = None
+) -> list[Path]:
     eval_map_count = max(int(eval_map_count), 0)
     if eval_map_count <= 0:
         return []
@@ -84,15 +110,21 @@ def resolve_fixed_eval_maps(eval_map_count: int, maps_dir: str | Path | None = N
     return map_files[: min(eval_map_count, len(map_files))]
 
 
-def _normalize_result_entry(result: dict[str, object], fallback_index: int) -> dict[str, object]:
+def _normalize_result_entry(
+    result: dict[str, object], fallback_index: int
+) -> dict[str, object]:
     normalized = dict(result)
     map_number = max(int(result.get("map_slot", fallback_index)), 1)
     normalized["map_slot"] = map_number
-    normalized["map_label"] = str(result.get("map_label") or get_eval_map_name(map_number))
+    normalized["map_label"] = str(
+        result.get("map_label") or get_eval_map_name(map_number)
+    )
     return normalized
 
 
-def _normalize_detail_payload(payload: dict[str, object], detail_path: Path) -> dict[str, object] | None:
+def _normalize_detail_payload(
+    payload: dict[str, object], detail_path: Path
+) -> dict[str, object] | None:
     if "episode" not in payload:
         return None
     results = payload.get("results", [])
@@ -151,7 +183,9 @@ def get_evaluated_episodes(output_dir: str | Path) -> set[int]:
     return {int(item["episode"]) for item in load_evaluation_history(output_dir)}
 
 
-def save_evaluation_history_csv(history: list[dict[str, object]], output_dir: str | Path) -> Path:
+def save_evaluation_history_csv(
+    history: list[dict[str, object]], output_dir: str | Path
+) -> Path:
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
     csv_path = output_dir / "evaluation_history.csv"
@@ -165,6 +199,7 @@ def save_evaluation_history_csv(history: list[dict[str, object]], output_dir: st
         "completion_steps",
         "completion_travel_dist",
         "episode_return",
+        *SUMMARY_BENCHMARK_FIELDS,
         "best_explored_rate",
         "worst_explored_rate",
         "detail_path",
@@ -186,10 +221,14 @@ def _metric_value(result: dict[str, object], metric_name: str) -> float:
     return float(value)
 
 
-def save_per_map_metric_plots(detail_history: list[dict[str, object]], output_dir: str | Path) -> dict[str, Path]:
+def save_per_map_metric_plots(
+    detail_history: list[dict[str, object]], output_dir: str | Path
+) -> dict[str, Path]:
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
-    episodes = np.asarray([int(item["episode"]) for item in detail_history], dtype=float)
+    episodes = np.asarray(
+        [int(item["episode"]) for item in detail_history], dtype=float
+    )
     map_numbers = sorted(
         {
             int(result["map_slot"])
@@ -216,7 +255,9 @@ def save_per_map_metric_plots(detail_history: list[dict[str, object]], output_di
                     for result in item.get("results", [])
                     if isinstance(result, dict) and "map_slot" in result
                 }
-                values.append(_metric_value(result_by_slot.get(map_number), metric_name))
+                values.append(
+                    _metric_value(result_by_slot.get(map_number), metric_name)
+                )
 
             values_array = np.asarray(values, dtype=float)
             finite_mask = np.isfinite(values_array)
@@ -237,7 +278,14 @@ def save_per_map_metric_plots(detail_history: list[dict[str, object]], output_di
             if metric_name.endswith("_rate"):
                 ax.set_ylim(-0.05, 1.05)
         else:
-            ax.text(0.5, 0.5, "No evaluation data yet", ha="center", va="center", transform=ax.transAxes)
+            ax.text(
+                0.5,
+                0.5,
+                "No evaluation data yet",
+                ha="center",
+                va="center",
+                transform=ax.transAxes,
+            )
         ax.set_title(metric_title)
         ax.set_xlabel("Train Episode")
         ax.set_ylabel(metric_title)
@@ -270,11 +318,19 @@ def save_evaluation_summary(
     raw_dir.mkdir(parents=True, exist_ok=True)
     detail_dir = ensure_episode_bucket_dir(raw_dir, episode_number, bucket_size)
     detail_path = detail_dir / f"eval_episode_{int(episode_number):05d}.json"
-    detail_payload = {"episode": int(episode_number), "summary": summary, "results": normalized_results}
+    detail_payload = {
+        "episode": int(episode_number),
+        "summary": summary,
+        "results": normalized_results,
+    }
     detail_path.write_text(json.dumps(detail_payload, indent=2))
 
     history = load_evaluation_history(output_dir)
-    history_entry = {"episode": int(episode_number), **summary, "detail_path": str(detail_path.resolve())}
+    history_entry = {
+        "episode": int(episode_number),
+        **summary,
+        "detail_path": str(detail_path.resolve()),
+    }
     history = [item for item in history if int(item["episode"]) != int(episode_number)]
     history.append(history_entry)
     history.sort(key=lambda item: int(item["episode"]))
@@ -323,15 +379,24 @@ def evaluate_policy(
     eval_bucket_size = max(int(output_config.auto_eval_interval), 1)
 
     policy_net = PolicyNet(NODE_INPUT_DIM, EMBEDDING_DIM).to(eval_device)
-    policy_net.load_state_dict(_copy_state_dict_to_device(policy_state_dict, eval_device))
+    policy_net.load_state_dict(
+        _copy_state_dict_to_device(policy_state_dict, eval_device)
+    )
     policy_net.eval()
 
     results = []
     for map_index, map_path in enumerate(eval_maps, start=1):
-        map_dir = ensure_eval_map_dir(eval_gifs_root, episode_number, map_index, eval_bucket_size)
-        artifact_stem = (
-            f"eval_episode_{int(episode_number):05d}_{get_eval_map_name(map_index)}_{_sanitize_artifact_token(map_path.stem)}"
+        eval_seed = derive_episode_seed(
+            output_config.seed,
+            episode_number,
+            meta_agent_id=map_index,
+            offset=output_config.eval_seed_offset,
         )
+        set_global_seeds(eval_seed)
+        map_dir = ensure_eval_map_dir(
+            eval_gifs_root, episode_number, map_index, eval_bucket_size
+        )
+        artifact_stem = f"eval_episode_{int(episode_number):05d}_{get_eval_map_name(map_index)}_{_sanitize_artifact_token(map_path.stem)}"
         env = Env(
             episode_number,
             plot=True,
@@ -350,9 +415,34 @@ def evaluate_policy(
         episode_return = 0.0
         done = False
         steps_taken = 0
+        timing_totals = {
+            "graph_update_time_sec": 0.0,
+            "observation_time_sec": 0.0,
+            "policy_inference_time_sec": 0.0,
+            "env_step_time_sec": 0.0,
+            "node_manager_update_time_sec": 0.0,
+            "dense_graph_build_time_sec": 0.0,
+            "graph_rarefaction_time_sec": 0.0,
+        }
 
+        planning_start = time.perf_counter()
         robot.update_planning_state(env.belief_info, env.robot_location)
+        initial_graph_time = time.perf_counter() - planning_start
+        timing_totals["graph_update_time_sec"] += float(
+            robot.last_planning_profile.get("planning_total_sec", initial_graph_time)
+        )
+        timing_totals["node_manager_update_time_sec"] += float(
+            robot.last_planning_profile.get("node_manager_update_sec", 0.0)
+        )
+        timing_totals["dense_graph_build_time_sec"] += float(
+            robot.last_planning_profile.get("dense_graph_build_sec", 0.0)
+        )
+        timing_totals["graph_rarefaction_time_sec"] += float(
+            robot.last_planning_profile.get("graph_rarefaction_sec", 0.0)
+        )
+        observation_start = time.perf_counter()
         observation = robot.get_observation()
+        timing_totals["observation_time_sec"] += time.perf_counter() - observation_start
         ground_truth_node_manager.get_ground_truth_observation(env.robot_location)
 
         robot.plot_env()
@@ -366,11 +456,35 @@ def evaluate_policy(
             if done:
                 break
 
+            policy_start = time.perf_counter()
             next_location, _ = robot.select_next_waypoint(observation, greedy=greedy)
+            timing_totals["policy_inference_time_sec"] += (
+                time.perf_counter() - policy_start
+            )
+            env_step_start = time.perf_counter()
             reward = env.step(next_location)
+            timing_totals["env_step_time_sec"] += time.perf_counter() - env_step_start
 
+            planning_start = time.perf_counter()
             robot.update_planning_state(env.belief_info, env.robot_location)
+            graph_update_time = time.perf_counter() - planning_start
+            timing_totals["graph_update_time_sec"] += float(
+                robot.last_planning_profile.get("planning_total_sec", graph_update_time)
+            )
+            timing_totals["node_manager_update_time_sec"] += float(
+                robot.last_planning_profile.get("node_manager_update_sec", 0.0)
+            )
+            timing_totals["dense_graph_build_time_sec"] += float(
+                robot.last_planning_profile.get("dense_graph_build_sec", 0.0)
+            )
+            timing_totals["graph_rarefaction_time_sec"] += float(
+                robot.last_planning_profile.get("graph_rarefaction_sec", 0.0)
+            )
+            observation_start = time.perf_counter()
             observation = robot.get_observation()
+            timing_totals["observation_time_sec"] += (
+                time.perf_counter() - observation_start
+            )
             ground_truth_node_manager.get_ground_truth_observation(env.robot_location)
             steps_taken = step + 1
 
@@ -385,6 +499,29 @@ def evaluate_policy(
 
         gif_path = make_gif(map_dir, artifact_stem, env.frame_files, env.explored_rate)
         last_frame = env.frame_files[-1] if env.frame_files else None
+        benchmark_metrics = compute_benchmark_metrics(
+            explored_rate=env.explored_rate,
+            travel_dist=env.travel_dist,
+            steps_taken=steps_taken,
+            total_free_cells=int(np.sum(env.ground_truth == parameter_module.FREE)),
+            cell_size=float(env.cell_size),
+            episode_wall_time_sec=sum(
+                timing_totals[key]
+                for key in (
+                    "graph_update_time_sec",
+                    "observation_time_sec",
+                    "policy_inference_time_sec",
+                    "env_step_time_sec",
+                )
+            ),
+            graph_update_time_sec=timing_totals["graph_update_time_sec"],
+            observation_time_sec=timing_totals["observation_time_sec"],
+            policy_inference_time_sec=timing_totals["policy_inference_time_sec"],
+            env_step_time_sec=timing_totals["env_step_time_sec"],
+            node_manager_update_time_sec=timing_totals["node_manager_update_time_sec"],
+            dense_graph_build_time_sec=timing_totals["dense_graph_build_time_sec"],
+            graph_rarefaction_time_sec=timing_totals["graph_rarefaction_time_sec"],
+        )
         results.append(
             {
                 "episode": int(episode_number),
@@ -392,6 +529,7 @@ def evaluate_policy(
                 "map_label": get_eval_map_name(map_index),
                 "map_name": map_path.name,
                 "map_path": str(map_path.resolve()),
+                "eval_seed": int(eval_seed),
                 "explored_rate": float(env.explored_rate),
                 "travel_dist": float(env.travel_dist),
                 "success": bool(done),
@@ -400,8 +538,13 @@ def evaluate_policy(
                 "steps_taken": int(steps_taken),
                 "completion_steps": int(steps_taken) if done else None,
                 "completion_travel_dist": float(env.travel_dist) if done else None,
-                "gif_path": str(Path(gif_path).resolve()) if gif_path is not None else None,
-                "last_frame_path": str(Path(last_frame).resolve()) if last_frame is not None else None,
+                **benchmark_metrics,
+                "gif_path": (
+                    str(Path(gif_path).resolve()) if gif_path is not None else None
+                ),
+                "last_frame_path": (
+                    str(Path(last_frame).resolve()) if last_frame is not None else None
+                ),
             }
         )
     return results
@@ -418,30 +561,43 @@ def summarize_eval_results(results: list[dict[str, object]]) -> dict[str, object
             "steps_taken": 0.0,
             "completion_steps": None,
             "completion_travel_dist": None,
+            **{field: 0.0 for field in SUMMARY_BENCHMARK_FIELDS},
             "best_explored_rate": 0.0,
             "worst_explored_rate": 0.0,
         }
 
-    explored = np.array([float(result["explored_rate"]) for result in results], dtype=float)
-    travel = np.array([float(result["travel_dist"]) for result in results], dtype=float)
-    success = np.array([float(bool(result["success"])) for result in results], dtype=float)
-    episode_return = np.array([float(result["episode_return"]) for result in results], dtype=float)
-    steps = np.array([float(result["steps_taken"]) for result in results], dtype=float)
-    completion_steps = [float(result["completion_steps"]) for result in results if result["completion_steps"] is not None]
+    explored = np.array(
+        [float(result["explored_rate"]) for result in results], dtype=float
+    )
+    completion_steps = [
+        float(result["completion_steps"])
+        for result in results
+        if result["completion_steps"] is not None
+    ]
     completion_travel = [
         float(result["completion_travel_dist"])
         for result in results
         if result["completion_travel_dist"] is not None
     ]
-    return {
+    summary = {
         "evaluated_maps": len(results),
-        "explored_rate": float(np.mean(explored)),
-        "travel_dist": float(np.mean(travel)),
-        "success_rate": float(np.mean(success)),
-        "episode_return": float(np.mean(episode_return)),
-        "steps_taken": float(np.mean(steps)),
-        "completion_steps": float(np.mean(completion_steps)) if completion_steps else None,
-        "completion_travel_dist": float(np.mean(completion_travel)) if completion_travel else None,
+        "completion_steps": (
+            float(np.mean(completion_steps)) if completion_steps else None
+        ),
+        "completion_travel_dist": (
+            float(np.mean(completion_travel)) if completion_travel else None
+        ),
         "best_explored_rate": float(np.max(explored)),
         "worst_explored_rate": float(np.min(explored)),
     }
+    for field in SUMMARY_MEAN_FIELDS:
+        values = np.array(
+            [
+                float(result[field])
+                for result in results
+                if result.get(field) is not None
+            ],
+            dtype=float,
+        )
+        summary[field] = float(np.mean(values)) if values.size > 0 else 0.0
+    return summary

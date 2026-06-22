@@ -205,6 +205,17 @@ class Node:
         self.coords = coords
         self.utility_range = UTILITY_RANGE
         self.utility = 0
+
+        self.utility_kf = None
+        self.predicted_utility = 0.0
+        if ENABLE_KF_UTILITY_PREDICTION:
+            self.utility_kf = ScalarKalmanFilter(
+                initial_state=0.0,
+                initial_variance=KF_UTILITY_INITIAL_VARIANCE,
+                process_noise=KF_UTILITY_PROCESS_NOISE,
+                measurement_noise=KF_UTILITY_MEASUREMENT_NOISE,
+            )
+
         self.observable_frontiers = self.initialize_observable_frontiers(frontiers, updating_map_info)
         self.visited = 0
 
@@ -213,16 +224,6 @@ class Node:
         self.neighbor_matrix[2, 2] = 1
         self.neighbor_set.add((self.coords[0], self.coords[1]))
         self.need_update_neighbor = True
-
-        self.utility_kf = None
-        self.predicted_utility = float(self.utility)
-        if ENABLE_KF_UTILITY_PREDICTION:
-            self.utility_kf = ScalarKalmanFilter(
-                initial_state=float(self.utility),
-                initial_variance=KF_UTILITY_INITIAL_VARIANCE,
-                process_noise=KF_UTILITY_PROCESS_NOISE,
-                measurement_noise=KF_UTILITY_MEASUREMENT_NOISE,
-            )
 
     def initialize_observable_frontiers(self, frontiers, updating_map_info):
         if len(frontiers) == 0:

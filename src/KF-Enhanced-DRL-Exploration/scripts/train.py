@@ -11,9 +11,16 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-os.environ.setdefault("MPLCONFIGDIR", f"/tmp/mpl-large-drl-{os.environ.get('USER', 'user')}")
+os.environ.setdefault(
+    "MPLCONFIGDIR", f"/tmp/mpl-large-drl-{os.environ.get('USER', 'user')}"
+)
 
-from parameter import RuntimeConfig, SMOKE_FOLDER_NAME, get_run_identity_from_checkpoint, resolve_resume_checkpoint
+from parameter import (
+    RuntimeConfig,
+    SMOKE_FOLDER_NAME,
+    get_run_identity_from_checkpoint,
+    resolve_resume_checkpoint,
+)
 from runtime_utils import configure_matplotlib_cache
 
 
@@ -29,13 +36,23 @@ def _parse_bool01(raw_value: str | bool | None) -> bool:
 
 
 def _add_bool_switch(parser: argparse.ArgumentParser, flag: str, dest: str) -> None:
-    parser.add_argument(flag, dest=dest, nargs="?", const="1", type=_parse_bool01, metavar="0|1", default=None)
+    parser.add_argument(
+        flag,
+        dest=dest,
+        nargs="?",
+        const="1",
+        type=_parse_bool01,
+        metavar="0|1",
+        default=None,
+    )
 
 
 def parse_args():
     parser = argparse.ArgumentParser()
     parser.add_argument("--smoke", action="store_true")
     parser.add_argument("--resume-from", dest="resume_from")
+    parser.add_argument("--seed", dest="seed", type=int)
+    parser.add_argument("--eval-seed-offset", dest="eval_seed_offset", type=int)
     parser.add_argument("--max-episodes", dest="max_episodes", type=int)
     parser.add_argument("--num-meta-agent", dest="num_meta_agent", type=int)
     parser.add_argument("--ray-num-cpus", dest="ray_num_cpus", type=int)
@@ -48,10 +65,16 @@ def parse_args():
     parser.add_argument("--save-img-gap", dest="save_img_gap", type=int)
     parser.add_argument("--save-model-gap", dest="save_model_gap", type=int)
     parser.add_argument("--summary-window", dest="summary_window", type=int)
-    parser.add_argument("--train-updates-per-iter", dest="train_updates_per_iter", type=int)
-    parser.add_argument("--result-bucket-episodes", dest="result_bucket_episodes", type=int)
+    parser.add_argument(
+        "--train-updates-per-iter", dest="train_updates_per_iter", type=int
+    )
+    parser.add_argument(
+        "--result-bucket-episodes", dest="result_bucket_episodes", type=int
+    )
     parser.add_argument("--monitor-window", dest="monitor_window", type=int)
-    parser.add_argument("--monitor-snapshot-interval", dest="monitor_snapshot_interval", type=int)
+    parser.add_argument(
+        "--monitor-snapshot-interval", dest="monitor_snapshot_interval", type=int
+    )
     parser.add_argument("--auto-eval-map-count", dest="auto_eval_map_count", type=int)
     parser.add_argument("--auto-eval-interval", dest="auto_eval_interval", type=int)
     parser.add_argument("--run-name", dest="run_name")
@@ -105,6 +128,8 @@ def build_runtime_config(args) -> RuntimeConfig:
 
     overrides = {}
     for field in (
+        "seed",
+        "eval_seed_offset",
         "max_episodes",
         "num_meta_agent",
         "ray_num_cpus",

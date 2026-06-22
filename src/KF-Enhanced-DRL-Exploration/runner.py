@@ -3,13 +3,23 @@ from __future__ import annotations
 import os
 
 from parameter import EMBEDDING_DIM, NODE_INPUT_DIM, RuntimeConfig, apply_runtime_config
-from runtime_utils import configure_matplotlib_cache, configure_worker_process_threads, resolve_worker_num_threads
+from runtime_utils import (
+    configure_matplotlib_cache,
+    configure_worker_process_threads,
+    derive_episode_seed,
+    resolve_worker_num_threads,
+    set_global_seeds,
+)
 
 
 class Runner:
     def __init__(self, meta_agent_id, runtime_config: RuntimeConfig):
         self.meta_agent_id = meta_agent_id
         self.runtime_config = apply_runtime_config(runtime_config)
+        self.runner_seed = derive_episode_seed(
+            self.runtime_config.seed, 0, meta_agent_id=self.meta_agent_id
+        )
+        set_global_seeds(self.runner_seed)
         self.worker_num_threads = resolve_worker_num_threads(self.runtime_config)
         configure_worker_process_threads(self.worker_num_threads)
         configure_matplotlib_cache(f"runner-{self.meta_agent_id}-pid-{os.getpid()}")
@@ -33,7 +43,8 @@ class Runner:
         print(
             f"runner_init metaAgent={self.meta_agent_id} "
             f"device={self.device.type} "
-            f"worker_num_threads={self.worker_num_threads}"
+            f"worker_num_threads={self.worker_num_threads} "
+            f"seed={self.runner_seed}"
         )
 
     def get_weights(self):
@@ -51,6 +62,7 @@ class Runner:
             episode_number,
             device=self.device,
             save_image=save_img,
+            base_seed=self.runtime_config.seed,
         )
         worker.run_episode()
         return worker.episode_buffer, worker.perf_metrics

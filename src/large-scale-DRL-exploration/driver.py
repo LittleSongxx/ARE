@@ -571,16 +571,12 @@ def main(runtime_config: RuntimeConfig | None = None) -> dict:
     learner_gpu_count = _resolve_learner_gpu_count(runtime_config, device)
     learner_device_ids = list(range(learner_gpu_count))
     worker_runtime_config, worker_gpu_share = _resolve_worker_runtime(runtime_config)
+    os.environ["PYTHONPATH"] = pythonpath
+    os.environ["LARGE_DRL_RAY_WORKER_NUM_CPUS"] = str(worker_num_cpus)
+    os.environ["LARGE_DRL_WORKER_NUM_THREADS"] = str(worker_num_threads)
+    os.environ.setdefault("MPLCONFIGDIR", "")
     ray_init_kwargs = {
         "ignore_reinit_error": True,
-        "runtime_env": {
-            "env_vars": {
-                "PYTHONPATH": pythonpath,
-                "LARGE_DRL_RAY_WORKER_NUM_CPUS": str(worker_num_cpus),
-                "LARGE_DRL_WORKER_NUM_THREADS": str(worker_num_threads),
-                "MPLCONFIGDIR": os.environ.get("MPLCONFIGDIR", ""),
-            }
-        },
     }
     if requested_ray_num_cpus is not None:
         ray_init_kwargs["num_cpus"] = requested_ray_num_cpus

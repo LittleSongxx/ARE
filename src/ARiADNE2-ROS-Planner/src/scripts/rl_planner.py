@@ -46,6 +46,7 @@ class Runner:
 
         # graph related
         parameter.NODE_RESOLUTION = rospy.get_param('~node_resolution', parameter.NODE_RESOLUTION)
+        parameter.UPDATING_MAP_SIZE = 4 * parameter.SENSOR_RANGE + 4 * parameter.NODE_RESOLUTION
         parameter.CLUSTER_RANGE = rospy.get_param('~frontier_cluster_range', parameter.CLUSTER_RANGE)
         parameter.THR_NEXT_WAYPOINT = rospy.get_param('~next_waypoint_threshold', parameter.THR_NEXT_WAYPOINT)
         parameter.THR_GRAPH_HARD_UPDATE = rospy.get_param('~hard_update_threshold', parameter.THR_GRAPH_HARD_UPDATE)
@@ -272,17 +273,13 @@ class Runner:
                 if np.linalg.norm(self.next_waypoint - self.robot_location) > parameter.THR_TO_WAYPOINT:
                     return
 
-        # if planned one more step, use it
-        if len(self.next_waypoint_list) > 0:
-            if np.linalg.norm(self.next_waypoint - self.robot_location) > parameter.THR_TO_WAYPOINT:
-                pass
-            else:
-                self.robot_location = self.next_waypoint
-                self.next_waypoint = self.next_waypoint_list.pop(0)
-                waypoint_msg = self.waypoint_wrapper(self.next_waypoint)
-                self.waypoint_pub.publish(waypoint_msg)
+        # wait for robot to reach current waypoint before replanning
+        if self.next_waypoint is not None:
+            dist_to_wp = np.linalg.norm(self.next_waypoint - self.robot_location)
+            if dist_to_wp > parameter.THR_TO_WAYPOINT:
+                return
+
         self.next_waypoint_list = []
-        # print("robot location at", self.robot_location)
 
         # remove nodes on obstacles if any
         self.robot.node_manager.check_valid_node(self.robot_location, self.map_info)
@@ -331,17 +328,12 @@ class Runner:
             next_observation = self.robot.get_next_observation(next_node_index, observation)
             next_next_location, _ = self.robot.select_next_waypoint(next_observation)
 
-            # if next waypoint is too close, go to the next next waypoint
             if np.linalg.norm(next_location - self.robot_location) < parameter.NODE_RESOLUTION:
                 self.next_waypoint_list = []
 
             self.next_waypoint_list.append(next_next_location)
 
         t4 = time.time()
-        # print("next waypoint at", next_location)
-        # print("update planning state using {}".format(t2 - t1))
-        # print("prepare tensor input using {}".format(t3 - t2))
-        # print("neural network inference using {}".format(t4-t3))
 
         # if rl gets stuck, go to nearest frontier
         if parameter.ENABLE_SAVE_MODE:
@@ -361,6 +353,13 @@ class Runner:
         # publish
         self.run_time_pub.publish(run_time)
         self.waypoint_pub.publish(waypoint_msg)
+
+        n_nodes = len(self.robot.key_node_coords)
+        total_util = sum(self.robot.key_utility)
+        rospy.loginfo(
+            f"[Step {self.step}] robot={self.robot_location} -> wp={self.next_waypoint} "
+            f"| nodes={n_nodes} util={total_util:.1f} | plan={t4-t1:.3f}s"
+        )
 
         self.step += 1
         if self.publish_graph:

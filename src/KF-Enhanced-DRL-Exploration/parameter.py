@@ -13,31 +13,35 @@ import re
 # =====================================================================
 
 # -- 图稀疏化 (Graph Rarefaction) -----------------------------------
-ENABLE_GRAPH_RAREFACTION = True   # 节点数超 NODE_PADDING_SIZE 时自动稀疏化
+ENABLE_GRAPH_RAREFACTION = True  # 节点数超 NODE_PADDING_SIZE 时自动稀疏化
 
 # -- KF 奖励标准差归一化 (inspired by KRPO, arXiv:2505.07527) --------
 # 用 KF 跟踪 reward 均值/方差，将 target_q 中的 reward 除以 running std。
 # 只归一化尺度，不减均值，兼容 GAMMA=1.0。
 ENABLE_KF_REWARD_BASELINE = True
-KF_REWARD_PROCESS_NOISE = 0.01    # reward KF 过程噪声（越大适应越快）
-KF_REWARD_MEASUREMENT_NOISE = 1.0 # reward KF 观测噪声（越大跟踪越平滑）
+KF_REWARD_PROCESS_NOISE = 0.01  # reward KF 过程噪声（越大适应越快）
+KF_REWARD_MEASUREMENT_NOISE = 1.0  # reward KF 观测噪声（越大跟踪越平滑）
 
 # -- KF 节点 utility 预测 (KARNet, arXiv:2305.14644) ----------------
 # 策略观测始终用原始 utility（即时准确）。
 # KF 预测值仅用于图稀疏化的距离感知剪枝评分，防止误删暂时失去 utility 的节点。
 ENABLE_KF_UTILITY_PREDICTION = True
-KF_UTILITY_INITIAL_VARIANCE = 10.0   # utility KF 初始方差
-KF_UTILITY_PROCESS_NOISE = 0.3       # utility KF 过程噪声（越小预测越平滑）
-KF_UTILITY_MEASUREMENT_NOISE = 1.5   # utility KF 观测噪声（越大越信任 KF 预测）
+KF_UTILITY_INITIAL_VARIANCE = 10.0  # utility KF 初始方差
+KF_UTILITY_PROCESS_NOISE = 0.3  # utility KF 过程噪声（越小预测越平滑）
+KF_UTILITY_MEASUREMENT_NOISE = 1.5  # utility KF 观测噪声（越大越信任 KF 预测）
 
 # -- KF 位置去噪 (Sim-to-Real, arXiv:2303.07243) -------------------
-ENABLE_POSITION_KF = False        # 用 KF 滤波机器人位置（部署时开启）
+ENABLE_POSITION_KF = False  # 用 KF 滤波机器人位置（部署时开启）
 KF_POSITION_PROCESS_NOISE = 0.01  # 位置 KF 过程噪声
 KF_POSITION_MEASUREMENT_NOISE = 0.1  # 位置 KF 观测噪声
 
 # -- Domain Randomization (Sim-to-Real, arXiv:2303.07243) -----------
-POSITION_NOISE_STD = 0.0          # 位置高斯噪声标准差（0 = 关闭）
-SENSOR_NOISE_PROB = 0.0           # 信念图随机翻转概率（0 = 关闭）
+POSITION_NOISE_STD = 0.0  # 位置高斯噪声标准差（0 = 关闭）
+SENSOR_NOISE_PROB = 0.0  # 信念图随机翻转概率（0 = 关闭）
+
+# -- Benchmark / reproducibility ------------------------------------
+SEED = 4777
+EVAL_SEED_OFFSET = 100000
 
 # =====================================================================
 # 以下为原始参数，与 large-scale-DRL-exploration 保持一致
@@ -162,14 +166,18 @@ def _resolve_maps_dir() -> Path:
     return (PROJECT_ROOT / "maps").resolve()
 
 
-FOLDER_NAME = _env_str("LARGE_DRL_RUN_NAME", FOLDER_NAME).strip() or "kf_enhanced_drl_exploration"
+FOLDER_NAME = (
+    _env_str("LARGE_DRL_RUN_NAME", FOLDER_NAME).strip() or "kf_enhanced_drl_exploration"
+)
 RUN_SESSION = _env_str("LARGE_DRL_RUN_SESSION", RUN_SESSION).strip()
 
 SUMMARY_WINDOW = _env_int("LARGE_DRL_SUMMARY_WINDOW", SUMMARY_WINDOW)
 LOAD_MODEL = _env_bool("LARGE_DRL_LOAD_MODEL", LOAD_MODEL)
 SAVE_IMG_GAP = _env_int("LARGE_DRL_SAVE_IMG_GAP", SAVE_IMG_GAP)
 SAVE_MODEL_GAP = _env_int("LARGE_DRL_SAVE_MODEL_GAP", SAVE_MODEL_GAP)
-RESULT_BUCKET_EPISODES = _env_int("LARGE_DRL_RESULT_BUCKET_EPISODES", RESULT_BUCKET_EPISODES)
+RESULT_BUCKET_EPISODES = _env_int(
+    "LARGE_DRL_RESULT_BUCKET_EPISODES", RESULT_BUCKET_EPISODES
+)
 
 CELL_SIZE = _env_float("LARGE_DRL_CELL_SIZE", CELL_SIZE)
 NODE_RESOLUTION = _env_float("LARGE_DRL_NODE_RESOLUTION", NODE_RESOLUTION)
@@ -188,13 +196,19 @@ BATCH_SIZE = _env_int("LARGE_DRL_BATCH_SIZE", BATCH_SIZE)
 LR = _env_float("LARGE_DRL_LR", LR)
 GAMMA = _env_float("LARGE_DRL_GAMMA", GAMMA)
 NUM_META_AGENT = _env_int("LARGE_DRL_NUM_META_AGENT", NUM_META_AGENT)
-TRAIN_UPDATES_PER_ITER = _env_int("LARGE_DRL_TRAIN_UPDATES_PER_ITER", TRAIN_UPDATES_PER_ITER)
-TARGET_Q_UPDATE_INTERVAL = _env_int("LARGE_DRL_TARGET_Q_UPDATE_INTERVAL", TARGET_Q_UPDATE_INTERVAL)
+TRAIN_UPDATES_PER_ITER = _env_int(
+    "LARGE_DRL_TRAIN_UPDATES_PER_ITER", TRAIN_UPDATES_PER_ITER
+)
+TARGET_Q_UPDATE_INTERVAL = _env_int(
+    "LARGE_DRL_TARGET_Q_UPDATE_INTERVAL", TARGET_Q_UPDATE_INTERVAL
+)
 POLICY_GRAD_CLIP = _env_float("LARGE_DRL_POLICY_GRAD_CLIP", POLICY_GRAD_CLIP)
 Q_GRAD_CLIP = _env_float("LARGE_DRL_Q_GRAD_CLIP", Q_GRAD_CLIP)
 
 NODE_INPUT_DIM = _env_int("LARGE_DRL_NODE_INPUT_DIM", NODE_INPUT_DIM)
-CRITIC_NODE_INPUT_DIM = _env_int("LARGE_DRL_CRITIC_NODE_INPUT_DIM", CRITIC_NODE_INPUT_DIM)
+CRITIC_NODE_INPUT_DIM = _env_int(
+    "LARGE_DRL_CRITIC_NODE_INPUT_DIM", CRITIC_NODE_INPUT_DIM
+)
 EMBEDDING_DIM = _env_int("LARGE_DRL_EMBEDDING_DIM", EMBEDDING_DIM)
 
 K_SIZE = _env_int("LARGE_DRL_K_SIZE", K_SIZE)
@@ -204,28 +218,52 @@ USE_GPU = _env_bool("LARGE_DRL_USE_GPU", USE_GPU)
 USE_GPU_GLOBAL = _env_bool("LARGE_DRL_USE_GPU_GLOBAL", USE_GPU_GLOBAL)
 NUM_GPU = _env_int("LARGE_DRL_NUM_GPU", NUM_GPU)
 
-ENABLE_TRAINING_MONITOR = _env_bool("LARGE_DRL_ENABLE_TRAINING_MONITOR", ENABLE_TRAINING_MONITOR)
+ENABLE_TRAINING_MONITOR = _env_bool(
+    "LARGE_DRL_ENABLE_TRAINING_MONITOR", ENABLE_TRAINING_MONITOR
+)
 MONITOR_WINDOW = _env_int("LARGE_DRL_MONITOR_WINDOW", MONITOR_WINDOW)
-MONITOR_SNAPSHOT_INTERVAL = _env_int("LARGE_DRL_MONITOR_SNAPSHOT_INTERVAL", MONITOR_SNAPSHOT_INTERVAL)
+MONITOR_SNAPSHOT_INTERVAL = _env_int(
+    "LARGE_DRL_MONITOR_SNAPSHOT_INTERVAL", MONITOR_SNAPSHOT_INTERVAL
+)
 
 ENABLE_AUTO_EVAL = _env_bool("LARGE_DRL_ENABLE_AUTO_EVAL", ENABLE_AUTO_EVAL)
 AUTO_EVAL_MAP_COUNT = _env_int("LARGE_DRL_AUTO_EVAL_MAP_COUNT", AUTO_EVAL_MAP_COUNT)
 AUTO_EVAL_INTERVAL = _env_int("LARGE_DRL_AUTO_EVAL_INTERVAL", AUTO_EVAL_INTERVAL)
 AUTO_EVAL_GREEDY = _env_bool("LARGE_DRL_AUTO_EVAL_GREEDY", AUTO_EVAL_GREEDY)
 
-ENABLE_GRAPH_RAREFACTION = _env_bool("KF_ENABLE_GRAPH_RAREFACTION", ENABLE_GRAPH_RAREFACTION)
-ENABLE_KF_REWARD_BASELINE = _env_bool("KF_ENABLE_REWARD_BASELINE", ENABLE_KF_REWARD_BASELINE)
+ENABLE_GRAPH_RAREFACTION = _env_bool(
+    "KF_ENABLE_GRAPH_RAREFACTION", ENABLE_GRAPH_RAREFACTION
+)
+ENABLE_KF_REWARD_BASELINE = _env_bool(
+    "KF_ENABLE_REWARD_BASELINE", ENABLE_KF_REWARD_BASELINE
+)
 KF_REWARD_PROCESS_NOISE = _env_float("KF_REWARD_PROCESS_NOISE", KF_REWARD_PROCESS_NOISE)
-KF_REWARD_MEASUREMENT_NOISE = _env_float("KF_REWARD_MEASUREMENT_NOISE", KF_REWARD_MEASUREMENT_NOISE)
-ENABLE_KF_UTILITY_PREDICTION = _env_bool("KF_ENABLE_UTILITY_PREDICTION", ENABLE_KF_UTILITY_PREDICTION)
-KF_UTILITY_INITIAL_VARIANCE = _env_float("KF_UTILITY_INITIAL_VARIANCE", KF_UTILITY_INITIAL_VARIANCE)
-KF_UTILITY_PROCESS_NOISE = _env_float("KF_UTILITY_PROCESS_NOISE", KF_UTILITY_PROCESS_NOISE)
-KF_UTILITY_MEASUREMENT_NOISE = _env_float("KF_UTILITY_MEASUREMENT_NOISE", KF_UTILITY_MEASUREMENT_NOISE)
+KF_REWARD_MEASUREMENT_NOISE = _env_float(
+    "KF_REWARD_MEASUREMENT_NOISE", KF_REWARD_MEASUREMENT_NOISE
+)
+ENABLE_KF_UTILITY_PREDICTION = _env_bool(
+    "KF_ENABLE_UTILITY_PREDICTION", ENABLE_KF_UTILITY_PREDICTION
+)
+KF_UTILITY_INITIAL_VARIANCE = _env_float(
+    "KF_UTILITY_INITIAL_VARIANCE", KF_UTILITY_INITIAL_VARIANCE
+)
+KF_UTILITY_PROCESS_NOISE = _env_float(
+    "KF_UTILITY_PROCESS_NOISE", KF_UTILITY_PROCESS_NOISE
+)
+KF_UTILITY_MEASUREMENT_NOISE = _env_float(
+    "KF_UTILITY_MEASUREMENT_NOISE", KF_UTILITY_MEASUREMENT_NOISE
+)
 ENABLE_POSITION_KF = _env_bool("KF_ENABLE_POSITION_KF", ENABLE_POSITION_KF)
-KF_POSITION_PROCESS_NOISE = _env_float("KF_POSITION_PROCESS_NOISE", KF_POSITION_PROCESS_NOISE)
-KF_POSITION_MEASUREMENT_NOISE = _env_float("KF_POSITION_MEASUREMENT_NOISE", KF_POSITION_MEASUREMENT_NOISE)
+KF_POSITION_PROCESS_NOISE = _env_float(
+    "KF_POSITION_PROCESS_NOISE", KF_POSITION_PROCESS_NOISE
+)
+KF_POSITION_MEASUREMENT_NOISE = _env_float(
+    "KF_POSITION_MEASUREMENT_NOISE", KF_POSITION_MEASUREMENT_NOISE
+)
 POSITION_NOISE_STD = _env_float("KF_POSITION_NOISE_STD", POSITION_NOISE_STD)
 SENSOR_NOISE_PROB = _env_float("KF_SENSOR_NOISE_PROB", SENSOR_NOISE_PROB)
+SEED = _env_int("LARGE_DRL_SEED", SEED)
+EVAL_SEED_OFFSET = _env_int("LARGE_DRL_EVAL_SEED_OFFSET", EVAL_SEED_OFFSET)
 
 MAPS_DIR = _resolve_maps_dir()
 
@@ -243,7 +281,9 @@ def build_run_session(run_name: str = FOLDER_NAME) -> str:
     return datetime.now().strftime("%Y_%m%d_%H%M") + _get_run_suffix(run_name)
 
 
-def is_smoke_run(runtime_config_or_run_name: "RuntimeConfig | str | None" = None) -> bool:
+def is_smoke_run(
+    runtime_config_or_run_name: "RuntimeConfig | str | None" = None,
+) -> bool:
     if isinstance(runtime_config_or_run_name, RuntimeConfig):
         run_name = runtime_config_or_run_name.run_name
     else:
@@ -251,7 +291,9 @@ def is_smoke_run(runtime_config_or_run_name: "RuntimeConfig | str | None" = None
     return str(run_name or FOLDER_NAME).strip() == SMOKE_FOLDER_NAME
 
 
-def _require_run_session(runtime_config: "RuntimeConfig | None" = None, run_session: str | None = None) -> str:
+def _require_run_session(
+    runtime_config: "RuntimeConfig | None" = None, run_session: str | None = None
+) -> str:
     if run_session is not None:
         session = str(run_session).strip()
     elif runtime_config is not None:
@@ -263,47 +305,69 @@ def _require_run_session(runtime_config: "RuntimeConfig | None" = None, run_sess
     return session
 
 
-def get_result_session_root(runtime_config: "RuntimeConfig | None" = None, run_session: str | None = None) -> Path:
+def get_result_session_root(
+    runtime_config: "RuntimeConfig | None" = None, run_session: str | None = None
+) -> Path:
     return RESULT_ROOT / _require_run_session(runtime_config, run_session)
 
 
-def get_result_train_root(runtime_config: "RuntimeConfig | None" = None, run_session: str | None = None) -> Path:
+def get_result_train_root(
+    runtime_config: "RuntimeConfig | None" = None, run_session: str | None = None
+) -> Path:
     return get_result_session_root(runtime_config, run_session) / "train"
 
 
-def get_result_test_root(runtime_config: "RuntimeConfig | None" = None, run_session: str | None = None) -> Path:
+def get_result_test_root(
+    runtime_config: "RuntimeConfig | None" = None, run_session: str | None = None
+) -> Path:
     return get_result_session_root(runtime_config, run_session) / "test"
 
 
-def get_model_path(runtime_config: "RuntimeConfig | None" = None, run_session: str | None = None) -> Path:
+def get_model_path(
+    runtime_config: "RuntimeConfig | None" = None, run_session: str | None = None
+) -> Path:
     return get_result_train_root(runtime_config, run_session) / "model"
 
 
-def get_train_path(runtime_config: "RuntimeConfig | None" = None, run_session: str | None = None) -> Path:
+def get_train_path(
+    runtime_config: "RuntimeConfig | None" = None, run_session: str | None = None
+) -> Path:
     return get_result_train_root(runtime_config, run_session) / "tensorboard"
 
 
-def get_gifs_path(runtime_config: "RuntimeConfig | None" = None, run_session: str | None = None) -> Path:
+def get_gifs_path(
+    runtime_config: "RuntimeConfig | None" = None, run_session: str | None = None
+) -> Path:
     return get_result_train_root(runtime_config, run_session) / "gifs"
 
 
-def get_monitor_path(runtime_config: "RuntimeConfig | None" = None, run_session: str | None = None) -> Path:
+def get_monitor_path(
+    runtime_config: "RuntimeConfig | None" = None, run_session: str | None = None
+) -> Path:
     return get_result_train_root(runtime_config, run_session) / "monitor"
 
 
-def get_result_eval_path(runtime_config: "RuntimeConfig | None" = None, run_session: str | None = None) -> Path:
+def get_result_eval_path(
+    runtime_config: "RuntimeConfig | None" = None, run_session: str | None = None
+) -> Path:
     return get_result_test_root(runtime_config, run_session) / "eval"
 
 
-def get_result_eval_gifs_path(runtime_config: "RuntimeConfig | None" = None, run_session: str | None = None) -> Path:
+def get_result_eval_gifs_path(
+    runtime_config: "RuntimeConfig | None" = None, run_session: str | None = None
+) -> Path:
     return get_result_test_root(runtime_config, run_session) / "gifs"
 
 
-def get_checkpoint_path(runtime_config: "RuntimeConfig | None" = None, run_session: str | None = None) -> Path:
+def get_checkpoint_path(
+    runtime_config: "RuntimeConfig | None" = None, run_session: str | None = None
+) -> Path:
     return get_model_path(runtime_config, run_session) / "checkpoint.pth"
 
 
-def get_checkpoint_final_path(runtime_config: "RuntimeConfig | None" = None, run_session: str | None = None) -> Path:
+def get_checkpoint_final_path(
+    runtime_config: "RuntimeConfig | None" = None, run_session: str | None = None
+) -> Path:
     return get_model_path(runtime_config, run_session) / "checkpoint_final.pth"
 
 
@@ -314,7 +378,11 @@ def get_checkpoint_interrupted_path(
     return get_model_path(runtime_config, run_session) / "checkpoint_interrupted.pth"
 
 
-_CHECKPOINT_NAMES = ("checkpoint_interrupted.pth", "checkpoint_final.pth", "checkpoint.pth")
+_CHECKPOINT_NAMES = (
+    "checkpoint_interrupted.pth",
+    "checkpoint_final.pth",
+    "checkpoint.pth",
+)
 
 
 def _session_has_any_checkpoint(session_dir: Path) -> bool:
@@ -330,7 +398,9 @@ def iter_checkpoint_candidates(run_name: str = FOLDER_NAME) -> list[Path]:
         [
             path
             for path in RESULT_ROOT.iterdir()
-            if path.is_dir() and not path.name.endswith("_smoke") and _session_has_any_checkpoint(path)
+            if path.is_dir()
+            and not path.name.endswith("_smoke")
+            and _session_has_any_checkpoint(path)
         ],
         key=lambda path: path.name,
         reverse=True,
@@ -357,7 +427,9 @@ def get_latest_checkpoint_path(run_name: str = FOLDER_NAME) -> Path:
     return RESULT_ROOT / "checkpoint.pth"
 
 
-def get_run_identity_from_checkpoint(checkpoint_file: str | Path) -> tuple[str, str | None]:
+def get_run_identity_from_checkpoint(
+    checkpoint_file: str | Path,
+) -> tuple[str, str | None]:
     checkpoint_file = Path(checkpoint_file).resolve()
     try:
         relative = checkpoint_file.relative_to(RESULT_ROOT.resolve())
@@ -383,30 +455,42 @@ def get_run_identity_from_checkpoint(checkpoint_file: str | Path) -> tuple[str, 
 def resolve_resume_checkpoint(checkpoint_file: str | Path) -> tuple[Path, str]:
     checkpoint_file = Path(checkpoint_file).expanduser().resolve()
     if not checkpoint_file.is_file():
-        raise ValueError(f"Resume checkpoint does not exist or is not a file: {checkpoint_file}")
+        raise ValueError(
+            f"Resume checkpoint does not exist or is not a file: {checkpoint_file}"
+        )
 
     try:
         relative = checkpoint_file.relative_to(RESULT_ROOT.resolve())
     except ValueError as exc:
-        raise ValueError(f"Resume checkpoint must be inside {RESULT_ROOT.resolve()}") from exc
+        raise ValueError(
+            f"Resume checkpoint must be inside {RESULT_ROOT.resolve()}"
+        ) from exc
 
     if len(relative.parts) != 4:
         raise ValueError(
             f"Resume checkpoint must match result/<run_session>/train/model/<checkpoint_name>.pth: {checkpoint_file}"
         )
     run_session, split, model_dir, checkpoint_name = relative.parts
-    if split != "train" or model_dir != "model" or checkpoint_name not in _CHECKPOINT_NAMES:
+    if (
+        split != "train"
+        or model_dir != "model"
+        or checkpoint_name not in _CHECKPOINT_NAMES
+    ):
         raise ValueError(
             f"Resume checkpoint must match result/<run_session>/train/model/<checkpoint_name>.pth: {checkpoint_file}"
         )
 
     run_name, parsed_session = get_run_identity_from_checkpoint(checkpoint_file)
     if parsed_session is None or is_smoke_run(run_name):
-        raise ValueError(f"Resume checkpoint must be a normal training checkpoint: {checkpoint_file}")
+        raise ValueError(
+            f"Resume checkpoint must be a normal training checkpoint: {checkpoint_file}"
+        )
     return checkpoint_file, parsed_session
 
 
-def ensure_output_dirs(runtime_config: "RuntimeConfig | None" = None, run_session: str | None = None) -> None:
+def ensure_output_dirs(
+    runtime_config: "RuntimeConfig | None" = None, run_session: str | None = None
+) -> None:
     target_runtime = runtime_config
     if target_runtime is None and run_session is not None:
         target_runtime = RuntimeConfig(run_session=run_session)
@@ -414,7 +498,9 @@ def ensure_output_dirs(runtime_config: "RuntimeConfig | None" = None, run_sessio
     get_train_path(target_runtime, run_session).mkdir(parents=True, exist_ok=True)
     get_monitor_path(target_runtime, run_session).mkdir(parents=True, exist_ok=True)
     get_result_eval_path(target_runtime, run_session).mkdir(parents=True, exist_ok=True)
-    get_result_eval_gifs_path(target_runtime, run_session).mkdir(parents=True, exist_ok=True)
+    get_result_eval_gifs_path(target_runtime, run_session).mkdir(
+        parents=True, exist_ok=True
+    )
     if not is_smoke_run(target_runtime):
         get_model_path(target_runtime, run_session).mkdir(parents=True, exist_ok=True)
 
@@ -430,6 +516,8 @@ class RuntimeConfig:
     run_name: str = FOLDER_NAME
     run_session: str | None = None
     maps_dir: str | None = None
+    seed: int = SEED
+    eval_seed_offset: int = EVAL_SEED_OFFSET
     max_episodes: int = MAX_EPISODES
     num_meta_agent: int = NUM_META_AGENT
     ray_num_cpus: int | None = None
@@ -458,34 +546,56 @@ class RuntimeConfig:
     auto_eval_greedy: bool = AUTO_EVAL_GREEDY
 
     def __post_init__(self) -> None:
+        object.__setattr__(self, "seed", int(self.seed))
+        object.__setattr__(self, "eval_seed_offset", int(self.eval_seed_offset))
         object.__setattr__(self, "max_episodes", max(int(self.max_episodes), 1))
         object.__setattr__(self, "num_meta_agent", max(int(self.num_meta_agent), 1))
         object.__setattr__(self, "max_episode_step", max(int(self.max_episode_step), 1))
-        object.__setattr__(self, "minimum_buffer_size", max(int(self.minimum_buffer_size), 1))
+        object.__setattr__(
+            self, "minimum_buffer_size", max(int(self.minimum_buffer_size), 1)
+        )
         object.__setattr__(self, "batch_size", max(int(self.batch_size), 1))
-        object.__setattr__(self, "replay_size", max(int(self.replay_size), self.batch_size))
+        object.__setattr__(
+            self, "replay_size", max(int(self.replay_size), self.batch_size)
+        )
         object.__setattr__(self, "save_img_gap", max(int(self.save_img_gap), 1))
         object.__setattr__(self, "save_model_gap", max(int(self.save_model_gap), 1))
         object.__setattr__(self, "summary_window", max(int(self.summary_window), 1))
-        object.__setattr__(self, "train_updates_per_iter", max(int(self.train_updates_per_iter), 1))
-        object.__setattr__(self, "result_bucket_episodes", max(int(self.result_bucket_episodes), 1))
+        object.__setattr__(
+            self, "train_updates_per_iter", max(int(self.train_updates_per_iter), 1)
+        )
+        object.__setattr__(
+            self, "result_bucket_episodes", max(int(self.result_bucket_episodes), 1)
+        )
         object.__setattr__(self, "num_gpu", max(int(self.num_gpu), 0))
         object.__setattr__(self, "monitor_window", max(int(self.monitor_window), 1))
-        object.__setattr__(self, "monitor_snapshot_interval", max(int(self.monitor_snapshot_interval), 1))
-        object.__setattr__(self, "auto_eval_map_count", max(int(self.auto_eval_map_count), 0))
-        object.__setattr__(self, "auto_eval_interval", max(int(self.auto_eval_interval), 1))
+        object.__setattr__(
+            self,
+            "monitor_snapshot_interval",
+            max(int(self.monitor_snapshot_interval), 1),
+        )
+        object.__setattr__(
+            self, "auto_eval_map_count", max(int(self.auto_eval_map_count), 0)
+        )
+        object.__setattr__(
+            self, "auto_eval_interval", max(int(self.auto_eval_interval), 1)
+        )
 
     def with_overrides(self, **kwargs: object) -> "RuntimeConfig":
         return replace(self, **kwargs)
 
 
 def apply_runtime_config(runtime_config: RuntimeConfig) -> RuntimeConfig:
-    run_session = runtime_config.run_session or build_run_session(runtime_config.run_name)
+    run_session = runtime_config.run_session or build_run_session(
+        runtime_config.run_name
+    )
     runtime_config = runtime_config.with_overrides(run_session=run_session)
 
     env_updates = {
         "LARGE_DRL_RUN_NAME": runtime_config.run_name,
         "LARGE_DRL_RUN_SESSION": run_session,
+        "LARGE_DRL_SEED": str(runtime_config.seed),
+        "LARGE_DRL_EVAL_SEED_OFFSET": str(runtime_config.eval_seed_offset),
         "LARGE_DRL_MAX_EPISODES": str(runtime_config.max_episodes),
         "LARGE_DRL_NUM_META_AGENT": str(runtime_config.num_meta_agent),
         "LARGE_DRL_MAX_EPISODE_STEP": str(runtime_config.max_episode_step),
@@ -501,9 +611,13 @@ def apply_runtime_config(runtime_config: RuntimeConfig) -> RuntimeConfig:
         "LARGE_DRL_USE_GPU": "1" if runtime_config.use_gpu else "0",
         "LARGE_DRL_USE_GPU_GLOBAL": "1" if runtime_config.use_gpu_global else "0",
         "LARGE_DRL_NUM_GPU": str(runtime_config.num_gpu),
-        "LARGE_DRL_ENABLE_TRAINING_MONITOR": "1" if runtime_config.enable_training_monitor else "0",
+        "LARGE_DRL_ENABLE_TRAINING_MONITOR": (
+            "1" if runtime_config.enable_training_monitor else "0"
+        ),
         "LARGE_DRL_MONITOR_WINDOW": str(runtime_config.monitor_window),
-        "LARGE_DRL_MONITOR_SNAPSHOT_INTERVAL": str(runtime_config.monitor_snapshot_interval),
+        "LARGE_DRL_MONITOR_SNAPSHOT_INTERVAL": str(
+            runtime_config.monitor_snapshot_interval
+        ),
         "LARGE_DRL_ENABLE_AUTO_EVAL": "1" if runtime_config.enable_auto_eval else "0",
         "LARGE_DRL_AUTO_EVAL_MAP_COUNT": str(runtime_config.auto_eval_map_count),
         "LARGE_DRL_AUTO_EVAL_INTERVAL": str(runtime_config.auto_eval_interval),
@@ -512,11 +626,17 @@ def apply_runtime_config(runtime_config: RuntimeConfig) -> RuntimeConfig:
     if runtime_config.ray_num_cpus is not None:
         env_updates["LARGE_DRL_RAY_NUM_CPUS"] = str(runtime_config.ray_num_cpus)
     if runtime_config.ray_worker_num_cpus is not None:
-        env_updates["LARGE_DRL_RAY_WORKER_NUM_CPUS"] = str(runtime_config.ray_worker_num_cpus)
+        env_updates["LARGE_DRL_RAY_WORKER_NUM_CPUS"] = str(
+            runtime_config.ray_worker_num_cpus
+        )
     if runtime_config.worker_num_threads is not None:
-        env_updates["LARGE_DRL_WORKER_NUM_THREADS"] = str(runtime_config.worker_num_threads)
+        env_updates["LARGE_DRL_WORKER_NUM_THREADS"] = str(
+            runtime_config.worker_num_threads
+        )
     if runtime_config.maps_dir:
-        env_updates["LARGE_DRL_MAPS_DIR"] = str(Path(runtime_config.maps_dir).expanduser().resolve())
+        env_updates["LARGE_DRL_MAPS_DIR"] = str(
+            Path(runtime_config.maps_dir).expanduser().resolve()
+        )
 
     for key, value in env_updates.items():
         os.environ[key] = value
@@ -525,6 +645,8 @@ def apply_runtime_config(runtime_config: RuntimeConfig) -> RuntimeConfig:
         {
             "FOLDER_NAME": runtime_config.run_name,
             "RUN_SESSION": run_session,
+            "SEED": runtime_config.seed,
+            "EVAL_SEED_OFFSET": runtime_config.eval_seed_offset,
             "MAX_EPISODES": runtime_config.max_episodes,
             "NUM_META_AGENT": runtime_config.num_meta_agent,
             "MAX_EPISODE_STEP": runtime_config.max_episode_step,

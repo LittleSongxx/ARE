@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import time
+
 import numpy as np
 import torch
 
@@ -7,10 +9,18 @@ from graph_rarefaction import graph_rarefaction
 from kalman_filter import PositionKF
 from node_manager import NodeManager
 from parameter import (
-    CELL_SIZE, FRONTIER_CELL_SIZE, K_SIZE, NODE_PADDING_SIZE, NODE_RESOLUTION,
-    SENSOR_RANGE, UPDATING_MAP_SIZE,
-    ENABLE_GRAPH_RAREFACTION, ENABLE_POSITION_KF, ENABLE_KF_UTILITY_PREDICTION,
-    KF_POSITION_PROCESS_NOISE, KF_POSITION_MEASUREMENT_NOISE,
+    CELL_SIZE,
+    FRONTIER_CELL_SIZE,
+    K_SIZE,
+    NODE_PADDING_SIZE,
+    NODE_RESOLUTION,
+    SENSOR_RANGE,
+    UPDATING_MAP_SIZE,
+    ENABLE_GRAPH_RAREFACTION,
+    ENABLE_POSITION_KF,
+    ENABLE_KF_UTILITY_PREDICTION,
+    KF_POSITION_PROCESS_NOISE,
+    KF_POSITION_MEASUREMENT_NOISE,
 )
 from utils import MapInfo, get_cell_position_from_coords, get_frontier_in_map
 
@@ -35,12 +45,18 @@ class Agent:
         self.current_index = None
         self.adjacent_matrix = None
         self.neighbor_indices = None
+        self.last_planning_profile = {}
+        self.last_observation_profile = {}
 
         self.enable_position_kf = ENABLE_POSITION_KF
-        self.position_kf = PositionKF(
-            process_noise=KF_POSITION_PROCESS_NOISE,
-            measurement_noise=KF_POSITION_MEASUREMENT_NOISE,
-        ) if self.enable_position_kf else None
+        self.position_kf = (
+            PositionKF(
+                process_noise=KF_POSITION_PROCESS_NOISE,
+                measurement_noise=KF_POSITION_MEASUREMENT_NOISE,
+            )
+            if self.enable_position_kf
+            else None
+        )
 
     def _policy_device(self) -> torch.device:
         try:
@@ -89,8 +105,12 @@ class Agent:
 
         min_x = self.map_info.map_origin_x
         min_y = self.map_info.map_origin_y
-        max_x = self.map_info.map_origin_x + self.cell_size * (self.map_info.map.shape[1] - 1)
-        max_y = self.map_info.map_origin_y + self.cell_size * (self.map_info.map.shape[0] - 1)
+        max_x = self.map_info.map_origin_x + self.cell_size * (
+            self.map_info.map.shape[1] - 1
+        )
+        max_y = self.map_info.map_origin_y + self.cell_size * (
+            self.map_info.map.shape[0] - 1
+        )
 
         if updating_map_origin_x < min_x:
             updating_map_origin_x = min_x
@@ -101,8 +121,12 @@ class Agent:
         if updating_map_top_y > max_y:
             updating_map_top_y = max_y
 
-        updating_map_origin_x = (updating_map_origin_x // self.cell_size + 1) * self.cell_size
-        updating_map_origin_y = (updating_map_origin_y // self.cell_size + 1) * self.cell_size
+        updating_map_origin_x = (
+            updating_map_origin_x // self.cell_size + 1
+        ) * self.cell_size
+        updating_map_origin_y = (
+            updating_map_origin_y // self.cell_size + 1
+        ) * self.cell_size
         updating_map_top_x = (updating_map_top_x // self.cell_size) * self.cell_size
         updating_map_top_y = (updating_map_top_y // self.cell_size) * self.cell_size
 
@@ -112,24 +136,38 @@ class Agent:
         updating_map_top_y = np.round(updating_map_top_y, 1)
 
         updating_map_origin = np.array([updating_map_origin_x, updating_map_origin_y])
-        updating_map_origin_in_global_map = get_cell_position_from_coords(updating_map_origin, self.map_info)
+        updating_map_origin_in_global_map = get_cell_position_from_coords(
+            updating_map_origin, self.map_info
+        )
 
         updating_map_top = np.array([updating_map_top_x, updating_map_top_y])
-        updating_map_top_in_global_map = get_cell_position_from_coords(updating_map_top, self.map_info)
+        updating_map_top_in_global_map = get_cell_position_from_coords(
+            updating_map_top, self.map_info
+        )
 
         updating_map = self.map_info.map[
-            updating_map_origin_in_global_map[1] : updating_map_top_in_global_map[1] + 1,
-            updating_map_origin_in_global_map[0] : updating_map_top_in_global_map[0] + 1,
+            updating_map_origin_in_global_map[1] : updating_map_top_in_global_map[1]
+            + 1,
+            updating_map_origin_in_global_map[0] : updating_map_top_in_global_map[0]
+            + 1,
         ]
 
-        return MapInfo(updating_map, updating_map_origin_x, updating_map_origin_y, self.cell_size)
+        return MapInfo(
+            updating_map, updating_map_origin_x, updating_map_origin_y, self.cell_size
+        )
 
     def update_planning_state(self, map_info, location):
+        planning_start = time.perf_counter()
         self.update_map(map_info)
         self.update_location(location)
         self.update_updating_map(self.location)
         self.update_frontiers()
-        self.node_manager.update_graph(self.location, self.frontier, self.updating_map_info, self.map_info)
+        node_manager_start = time.perf_counter()
+        self.node_manager.update_graph(
+            self.location, self.frontier, self.updating_map_info, self.map_info
+        )
+        node_manager_update_sec = time.perf_counter() - node_manager_start
+        observation_start = time.perf_counter()
         (
             self.node_coords,
             self.utility,
@@ -138,6 +176,13 @@ class Agent:
             self.current_index,
             self.neighbor_indices,
         ) = self.update_observation()
+        observation_update_sec = time.perf_counter() - observation_start
+        self.last_planning_profile = {
+            "planning_total_sec": time.perf_counter() - planning_start,
+            "node_manager_update_sec": node_manager_update_sec,
+            "observation_update_sec": observation_update_sec,
+            **self.last_observation_profile,
+        }
 
     def _build_dense_graph(self):
         """Collect all nodes from the quadtree into dense arrays.
@@ -162,29 +207,55 @@ class Agent:
             predicted_utility.append(node.predicted_utility)
             guidepost.append(node.visited)
             for neighbor in node.neighbor_set:
-                index = np.argwhere(node_coords_to_check == neighbor[0] + neighbor[1] * 1j)[0][0]
+                index = np.argwhere(
+                    node_coords_to_check == neighbor[0] + neighbor[1] * 1j
+                )[0][0]
                 adjacent_matrix[i, index] = 0
 
         utility = np.array(utility)
         predicted_utility = np.array(predicted_utility)
         guidepost = np.array(guidepost)
         current_index = int(
-            np.argwhere(node_coords_to_check == self.location[0] + self.location[1] * 1j)[0][0]
+            np.argwhere(
+                node_coords_to_check == self.location[0] + self.location[1] * 1j
+            )[0][0]
         )
-        return all_node_coords, utility, predicted_utility, guidepost, adjacent_matrix, current_index
+        return (
+            all_node_coords,
+            utility,
+            predicted_utility,
+            guidepost,
+            adjacent_matrix,
+            current_index,
+        )
 
     def update_observation(self):
-        dense_coords, dense_utility, dense_pred_utility, dense_guidepost, dense_adj, dense_current = (
-            self._build_dense_graph()
-        )
+        dense_graph_build_start = time.perf_counter()
+        (
+            dense_coords,
+            dense_utility,
+            dense_pred_utility,
+            dense_guidepost,
+            dense_adj,
+            dense_current,
+        ) = self._build_dense_graph()
+        dense_graph_build_sec = time.perf_counter() - dense_graph_build_start
+        graph_rarefaction_sec = 0.0
+        rarefaction_applied = False
 
         if ENABLE_GRAPH_RAREFACTION and dense_coords.shape[0] > NODE_PADDING_SIZE:
             scoring = dense_pred_utility if ENABLE_KF_UTILITY_PREDICTION else None
+            rarefaction_start = time.perf_counter()
             selected, sparse_adj = graph_rarefaction(
-                dense_coords, dense_utility, dense_adj, dense_current,
+                dense_coords,
+                dense_utility,
+                dense_adj,
+                dense_current,
                 max_nodes=NODE_PADDING_SIZE - 1,
                 scoring_utility=scoring,
             )
+            graph_rarefaction_sec = time.perf_counter() - rarefaction_start
+            rarefaction_applied = True
             node_coords = dense_coords[selected]
             utility = dense_utility[selected]
             guidepost = dense_guidepost[selected]
@@ -198,7 +269,21 @@ class Agent:
             current_index = dense_current
 
         neighbor_indices = np.argwhere(adjacent_matrix[current_index] == 0).reshape(-1)
-        return node_coords, utility, guidepost, adjacent_matrix, current_index, neighbor_indices
+        self.last_observation_profile = {
+            "dense_graph_build_sec": dense_graph_build_sec,
+            "graph_rarefaction_sec": graph_rarefaction_sec,
+            "rarefaction_applied": rarefaction_applied,
+            "dense_node_count": int(dense_coords.shape[0]),
+            "sparse_node_count": int(node_coords.shape[0]),
+        }
+        return (
+            node_coords,
+            utility,
+            guidepost,
+            adjacent_matrix,
+            current_index,
+            neighbor_indices,
+        )
 
     def get_observation(self):
         node_coords = self.node_coords
@@ -210,29 +295,44 @@ class Agent:
         n_node = node_coords.shape[0]
 
         current_node_coords = node_coords[self.current_index]
-        node_coords = np.concatenate(
-            (
-                node_coords[:, 0].reshape(-1, 1) - current_node_coords[0],
-                node_coords[:, 1].reshape(-1, 1) - current_node_coords[1],
-            ),
-            axis=-1,
-        ) / UPDATING_MAP_SIZE / 2
+        node_coords = (
+            np.concatenate(
+                (
+                    node_coords[:, 0].reshape(-1, 1) - current_node_coords[0],
+                    node_coords[:, 1].reshape(-1, 1) - current_node_coords[1],
+                ),
+                axis=-1,
+            )
+            / UPDATING_MAP_SIZE
+            / 2
+        )
         node_utility = node_utility / (SENSOR_RANGE * 3.14 // FRONTIER_CELL_SIZE)
-        node_inputs = np.concatenate((node_coords, node_utility, node_guidepost), axis=1)
+        node_inputs = np.concatenate(
+            (node_coords, node_utility, node_guidepost), axis=1
+        )
         node_inputs = torch.FloatTensor(node_inputs).unsqueeze(0).to(self.device)
 
-        assert node_coords.shape[0] < NODE_PADDING_SIZE, (node_coords.shape[0], NODE_PADDING_SIZE)
+        assert node_coords.shape[0] < NODE_PADDING_SIZE, (
+            node_coords.shape[0],
+            NODE_PADDING_SIZE,
+        )
         padding = torch.nn.ZeroPad2d((0, 0, 0, NODE_PADDING_SIZE - n_node))
         node_inputs = padding(node_inputs)
 
-        node_padding_mask = torch.zeros((1, 1, n_node), dtype=torch.int16).to(self.device)
-        node_padding = torch.ones((1, 1, NODE_PADDING_SIZE - n_node), dtype=torch.int16).to(self.device)
+        node_padding_mask = torch.zeros((1, 1, n_node), dtype=torch.int16).to(
+            self.device
+        )
+        node_padding = torch.ones(
+            (1, 1, NODE_PADDING_SIZE - n_node), dtype=torch.int16
+        ).to(self.device)
         node_padding_mask = torch.cat((node_padding_mask, node_padding), dim=-1)
 
         current_index = torch.tensor([current_index]).reshape(1, 1, 1).to(self.device)
 
         edge_mask = torch.tensor(edge_mask).unsqueeze(0).to(self.device)
-        padding = torch.nn.ConstantPad2d((0, NODE_PADDING_SIZE - n_node, 0, NODE_PADDING_SIZE - n_node), 1)
+        padding = torch.nn.ConstantPad2d(
+            (0, NODE_PADDING_SIZE - n_node, 0, NODE_PADDING_SIZE - n_node), 1
+        )
         edge_mask = padding(edge_mask)
 
         current_in_edge = np.argwhere(current_edge == self.current_index)[0][0]
@@ -241,12 +341,21 @@ class Agent:
         padding = torch.nn.ConstantPad1d((0, K_SIZE - k_size), 0)
         current_edge = padding(current_edge).unsqueeze(-1).to(self.device)
 
-        edge_padding_mask = torch.zeros((1, 1, k_size), dtype=torch.int16).to(self.device)
+        edge_padding_mask = torch.zeros((1, 1, k_size), dtype=torch.int16).to(
+            self.device
+        )
         edge_padding_mask[0, 0, current_in_edge] = 1
         padding = torch.nn.ConstantPad1d((0, K_SIZE - k_size), 1)
         edge_padding_mask = padding(edge_padding_mask)
 
-        return [node_inputs, node_padding_mask, edge_mask, current_index, current_edge, edge_padding_mask]
+        return [
+            node_inputs,
+            node_padding_mask,
+            edge_mask,
+            current_index,
+            current_edge,
+            edge_padding_mask,
+        ]
 
     def select_next_waypoint(self, observation, greedy=False):
         observation = self._align_observation_device(observation)
@@ -270,7 +379,9 @@ class Agent:
         plt.subplot(1, 3, 2)
         nodes = get_cell_position_from_coords(self.node_coords, self.map_info)
         if len(self.frontier) > 0:
-            frontiers = get_cell_position_from_coords(np.array(list(self.frontier)), self.map_info).reshape(-1, 2)
+            frontiers = get_cell_position_from_coords(
+                np.array(list(self.frontier)), self.map_info
+            ).reshape(-1, 2)
             plt.scatter(frontiers[:, 0], frontiers[:, 1], c="r", s=2)
         robot = get_cell_position_from_coords(self.location, self.map_info)
         plt.imshow(self.map_info.map, cmap="gray")
@@ -284,8 +395,10 @@ class Agent:
             for neighbor_coords in node.neighbor_set:
                 end = (np.array(neighbor_coords) - coords) / 2 + coords
                 plt.plot(
-                    (np.array([coords[0], end[0]]) - self.map_info.map_origin_x) / self.cell_size,
-                    (np.array([coords[1], end[1]]) - self.map_info.map_origin_y) / self.cell_size,
+                    (np.array([coords[0], end[0]]) - self.map_info.map_origin_x)
+                    / self.cell_size,
+                    (np.array([coords[1], end[1]]) - self.map_info.map_origin_y)
+                    / self.cell_size,
                     "tan",
                     zorder=1,
                 )

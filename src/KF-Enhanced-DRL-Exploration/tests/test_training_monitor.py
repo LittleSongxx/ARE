@@ -10,7 +10,9 @@ from training_monitor import TrainingMonitor
 class TrainingMonitorTests(unittest.TestCase):
     def test_monitor_writes_progress_and_diagnostic_plots(self):
         with tempfile.TemporaryDirectory() as tmpdir:
-            monitor = TrainingMonitor(Path(tmpdir) / "monitor", window_size=2, snapshot_interval=1)
+            monitor = TrainingMonitor(
+                Path(tmpdir) / "monitor", window_size=2, snapshot_interval=1
+            )
 
             monitor.update_train(
                 10,
@@ -19,6 +21,8 @@ class TrainingMonitorTests(unittest.TestCase):
                     "episode_return": 4.0,
                     "travel_dist": 120.0,
                     "episode_steps": 18.0,
+                    "distance_efficiency": 0.32,
+                    "mean_planning_time_ms": 8.5,
                     "policy_loss": 0.5,
                     "q_value_loss": 1.2,
                     "alpha_loss": -0.1,
@@ -40,6 +44,9 @@ class TrainingMonitorTests(unittest.TestCase):
                     "travel_dist": 140.0,
                     "steps_taken": 20.0,
                     "episode_return": 3.5,
+                    "distance_efficiency": 0.28,
+                    "time_efficiency": 0.12,
+                    "mean_planning_time_ms": 9.2,
                 },
             )
 
@@ -50,6 +57,8 @@ class TrainingMonitorTests(unittest.TestCase):
                     "episode_return": 5.0,
                     "travel_dist": 110.0,
                     "episode_steps": 16.0,
+                    "distance_efficiency": 0.41,
+                    "mean_planning_time_ms": 7.1,
                     "policy_loss": 0.4,
                     "q_value_loss": 1.0,
                     "alpha_loss": -0.15,
@@ -71,6 +80,9 @@ class TrainingMonitorTests(unittest.TestCase):
                     "travel_dist": 130.0,
                     "steps_taken": 18.0,
                     "episode_return": 3.8,
+                    "distance_efficiency": 0.34,
+                    "time_efficiency": 0.15,
+                    "mean_planning_time_ms": 8.0,
                 },
             )
 

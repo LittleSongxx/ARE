@@ -258,6 +258,7 @@ class Agent:
         current_index = self.key_current_index
         edge_mask = self.key_adjacent_matrix
         current_edge = self.key_neighbor_indices
+        n_node = node_coords.shape[0]
 
         node_coords[current_index] = robot_location
 
@@ -265,36 +266,53 @@ class Agent:
         node_coords = np.concatenate((node_coords[:, 0].reshape(-1, 1) - current_node_coords[0],
                                       node_coords[:, 1].reshape(-1, 1) - current_node_coords[1]),
                                      axis=-1) / parameter.UPDATING_MAP_SIZE / 2
-        node_utility = node_utility / (parameter.UTILITY_RANGE * 3.14 // parameter.FRONTIER_CELL_SIZE)
+        node_utility = node_utility / (parameter.SENSOR_RANGE * 3.14 // (2 * parameter.CELL_SIZE))
         node_inputs = np.concatenate((node_coords, node_utility, node_guidepost), axis=1)
         node_inputs = torch.FloatTensor(node_inputs).unsqueeze(0).to(self.device)
 
+        padding = torch.nn.ZeroPad2d((0, 0, 0, parameter.NODE_PADDING_SIZE - n_node))
+        node_inputs = padding(node_inputs)
+
+        node_padding_mask = torch.zeros((1, 1, n_node), dtype=torch.int16).to(self.device)
+        node_padding = torch.ones((1, 1, parameter.NODE_PADDING_SIZE - n_node), dtype=torch.int16).to(self.device)
+        node_padding_mask = torch.cat((node_padding_mask, node_padding), dim=-1)
+
         edge_mask = torch.tensor(edge_mask).unsqueeze(0).to(self.device)
+        padding = torch.nn.ConstantPad2d((0, parameter.NODE_PADDING_SIZE - n_node, 0, parameter.NODE_PADDING_SIZE - n_node), 1)
+        edge_mask = padding(edge_mask)
 
         current_in_edge = np.argwhere(current_edge == current_index)[0][0]
-        current_edge = torch.tensor(current_edge).unsqueeze(0).to(self.device)
+        current_edge = torch.tensor(current_edge, dtype=torch.long).unsqueeze(0)
         k_size = current_edge.size()[-1]
-        current_edge = current_edge.unsqueeze(-1)
+        padding = torch.nn.ConstantPad1d((0, parameter.K_SIZE - k_size), 0)
+        current_edge = padding(current_edge).unsqueeze(-1).to(self.device)
 
         current_index = torch.tensor([current_index]).reshape(1, 1, 1).to(self.device)
 
         edge_padding_mask = torch.zeros((1, 1, k_size), dtype=torch.int16).to(self.device)
         edge_padding_mask[0, 0, current_in_edge] = 1
+        padding = torch.nn.ConstantPad1d((0, parameter.K_SIZE - k_size), 1)
+        edge_padding_mask = padding(edge_padding_mask)
 
-        return [node_inputs, None, edge_mask, current_index, current_edge, edge_padding_mask]
+        return [node_inputs, node_padding_mask, edge_mask, current_index, current_edge, edge_padding_mask]
 
     def get_next_observation(self, next_node_index, observation):
-        node_inputs, _, edge_mask, curren_index, _, _ = observation
+        node_inputs, node_padding_mask, edge_mask, curren_index, _, _ = observation
         next_edge = torch.argwhere(edge_mask[0, next_node_index] == 0).flatten()
         next_in_edge = torch.argwhere(next_edge == next_node_index).item()
         curren_in_edge = torch.argwhere(next_edge == curren_index.item()).item()
         k_size = next_edge.size()[-1]
-        next_edge = next_edge.unsqueeze(-1).unsqueeze(0)
+
+        padding = torch.nn.ConstantPad1d((0, parameter.K_SIZE - k_size), 0)
+        next_edge = padding(next_edge.unsqueeze(0)).unsqueeze(-1)
+
         next_node_index = torch.tensor([next_node_index]).reshape(1, 1, 1).to(self.device)
         edge_padding_mask = torch.zeros((1, 1, k_size), dtype=torch.int16).to(self.device)
         edge_padding_mask[0, 0, next_in_edge] = 1
         edge_padding_mask[0, 0, curren_in_edge] = 1
-        return node_inputs, None, edge_mask, next_node_index, next_edge, edge_padding_mask
+        padding = torch.nn.ConstantPad1d((0, parameter.K_SIZE - k_size), 1)
+        edge_padding_mask = padding(edge_padding_mask)
+        return node_inputs, node_padding_mask, edge_mask, next_node_index, next_edge, edge_padding_mask
 
     def select_next_waypoint(self, observation, greedy=None):
         """

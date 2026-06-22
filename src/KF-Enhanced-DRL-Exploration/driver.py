@@ -16,7 +16,12 @@ import torch.nn as nn
 import torch.optim as optim
 from torch.utils.tensorboard import SummaryWriter
 
-from evaluation import evaluate_policy, get_evaluated_episodes, save_evaluation_summary, summarize_eval_results
+from evaluation import (
+    evaluate_policy,
+    get_evaluated_episodes,
+    save_evaluation_summary,
+    summarize_eval_results,
+)
 from kalman_filter import RewardBaselineKF
 from model import PolicyNet, QNet
 from parameter import (
@@ -104,10 +109,14 @@ def _signal_handler(signum, frame):
     if _saving_interrupt_checkpoint:
         return
     if _interrupt_raised:
-        print(f"\nInterrupt received again (signal {signum}). Waiting for checkpoint save...")
+        print(
+            f"\nInterrupt received again (signal {signum}). Waiting for checkpoint save..."
+        )
         return
     _interrupt_raised = True
-    print(f"\nInterrupt received (signal {signum}). Saving last completed checkpoint and exiting...")
+    print(
+        f"\nInterrupt received (signal {signum}). Saving last completed checkpoint and exiting..."
+    )
     raise KeyboardInterrupt
 
 
@@ -173,11 +182,15 @@ def _resolve_learner_device(runtime_config: RuntimeConfig) -> torch.device:
     ok, reason = _cuda_runtime_status()
     if ok:
         return torch.device("cuda:0")
-    print(f"[Run] learner GPU requested but CUDA is unavailable; fallback to CPU ({reason})")
+    print(
+        f"[Run] learner GPU requested but CUDA is unavailable; fallback to CPU ({reason})"
+    )
     return torch.device("cpu")
 
 
-def _resolve_learner_gpu_count(runtime_config: RuntimeConfig, device: torch.device) -> int:
+def _resolve_learner_gpu_count(
+    runtime_config: RuntimeConfig, device: torch.device
+) -> int:
     if device.type != "cuda":
         return 0
     env_visible = _visible_gpu_count_from_env()
@@ -202,9 +215,13 @@ def _wrap_data_parallel(module: nn.Module, device_ids: list[int]) -> nn.Module:
     return nn.DataParallel(module, device_ids=device_ids, output_device=device_ids[0])
 
 
-def _resolve_worker_runtime(runtime_config: RuntimeConfig) -> tuple[RuntimeConfig, float]:
+def _resolve_worker_runtime(
+    runtime_config: RuntimeConfig,
+) -> tuple[RuntimeConfig, float]:
     if runtime_config.use_gpu:
-        print("[Run] worker GPU request is ignored; collectors are forced to CPU-only mode")
+        print(
+            "[Run] worker GPU request is ignored; collectors are forced to CPU-only mode"
+        )
     return runtime_config.with_overrides(use_gpu=False, num_gpu=0), 0.0
 
 
@@ -230,7 +247,9 @@ def _format_metric(value) -> str:
     return f"{value:.4f}"
 
 
-def _print_train_progress(curr_episode, max_episodes, train_metrics, buffer_size, elapsed_sec):
+def _print_train_progress(
+    curr_episode, max_episodes, train_metrics, buffer_size, elapsed_sec
+):
     total_episodes = max(max_episodes, 1)
     progress = 100.0 * curr_episode / total_episodes
     print(
@@ -250,7 +269,9 @@ def _print_train_progress(curr_episode, max_episodes, train_metrics, buffer_size
 
 
 def _state_dict_to_cpu(module: nn.Module) -> dict:
-    return {key: value.detach().cpu().clone() for key, value in module.state_dict().items()}
+    return {
+        key: value.detach().cpu().clone() for key, value in module.state_dict().items()
+    }
 
 
 def _checkpoint_dict(learner_state: LearnerState, completed_episodes: int) -> dict:
@@ -262,7 +283,9 @@ def _checkpoint_dict(learner_state: LearnerState, completed_episodes: int) -> di
         "policy_optimizer": copy.deepcopy(learner_state.policy_optimizer.state_dict()),
         "q_net1_optimizer": copy.deepcopy(learner_state.q_net1_optimizer.state_dict()),
         "q_net2_optimizer": copy.deepcopy(learner_state.q_net2_optimizer.state_dict()),
-        "log_alpha_optimizer": copy.deepcopy(learner_state.log_alpha_optimizer.state_dict()),
+        "log_alpha_optimizer": copy.deepcopy(
+            learner_state.log_alpha_optimizer.state_dict()
+        ),
         "update_step": learner_state.update_step,
         "target_q_update_counter": learner_state.target_q_update_counter,
         "episode": completed_episodes,
@@ -278,7 +301,9 @@ def _save_checkpoint(
 ):
     payload = _checkpoint_dict(learner_state, completed_episodes)
     torch.save(payload, checkpoint_path)
-    bucket_dir = ensure_bucket_dir(bucket_model_dir, completed_episodes, runtime_config.result_bucket_episodes)
+    bucket_dir = ensure_bucket_dir(
+        bucket_model_dir, completed_episodes, runtime_config.result_bucket_episodes
+    )
     torch.save(payload, bucket_dir / "checkpoint.pth")
 
 
@@ -293,9 +318,13 @@ def _save_interrupt_checkpoint(
     payload = _checkpoint_dict(learner_state, completed_episodes)
     torch.save(payload, interrupt_path)
     torch.save(payload, checkpoint_path)
-    bucket_dir = ensure_bucket_dir(bucket_model_dir, completed_episodes, runtime_config.result_bucket_episodes)
+    bucket_dir = ensure_bucket_dir(
+        bucket_model_dir, completed_episodes, runtime_config.result_bucket_episodes
+    )
     torch.save(payload, bucket_dir / "checkpoint.pth")
-    print(f"interrupt_checkpoint_saved path={interrupt_path} episode={completed_episodes}")
+    print(
+        f"interrupt_checkpoint_saved path={interrupt_path} episode={completed_episodes}"
+    )
 
 
 def _resolve_runtime_session(runtime_config: RuntimeConfig) -> RuntimeConfig:
@@ -306,7 +335,9 @@ def _resolve_runtime_session(runtime_config: RuntimeConfig) -> RuntimeConfig:
         try:
             _, resume_session = resolve_resume_checkpoint(runtime_config.resume_from)
         except ValueError:
-            return runtime_config.with_overrides(run_session=build_run_session(runtime_config.run_name))
+            return runtime_config.with_overrides(
+                run_session=build_run_session(runtime_config.run_name)
+            )
         return runtime_config.with_overrides(run_session=resume_session)
 
     if runtime_config.load_model:
@@ -317,10 +348,14 @@ def _resolve_runtime_session(runtime_config: RuntimeConfig) -> RuntimeConfig:
             except ValueError:
                 pass
             else:
-                print(f"[Run] load_model detected; continuing in run_session={resume_session}")
+                print(
+                    f"[Run] load_model detected; continuing in run_session={resume_session}"
+                )
                 return runtime_config.with_overrides(run_session=resume_session)
 
-    return runtime_config.with_overrides(run_session=build_run_session(runtime_config.run_name))
+    return runtime_config.with_overrides(
+        run_session=build_run_session(runtime_config.run_name)
+    )
 
 
 def create_learner_state(device: torch.device) -> LearnerState:
@@ -375,7 +410,9 @@ def load_checkpoint(learner_state: LearnerState, checkpoint_path: Path) -> int:
     learner_state.q_net2_optimizer.load_state_dict(checkpoint["q_net2_optimizer"])
     learner_state.log_alpha_optimizer.load_state_dict(checkpoint["log_alpha_optimizer"])
     learner_state.update_step = int(checkpoint.get("update_step", 0))
-    learner_state.target_q_update_counter = int(checkpoint.get("target_q_update_counter", 1))
+    learner_state.target_q_update_counter = int(
+        checkpoint.get("target_q_update_counter", 1)
+    )
     return int(checkpoint.get("episode", 0))
 
 
@@ -395,10 +432,15 @@ def sample_rollout_batch(experience_buffer, batch_size: int, replace: bool = Fal
 
 
 def stack_batch_tensors(rollouts, device: torch.device) -> dict[str, torch.Tensor]:
-    return {key: torch.stack(values).to(device) for key, values in zip(ROLLOUT_BATCH_KEYS, rollouts)}
+    return {
+        key: torch.stack(values).to(device)
+        for key, values in zip(ROLLOUT_BATCH_KEYS, rollouts)
+    }
 
 
-def train_step(batch: dict[str, torch.Tensor], learner_state: LearnerState) -> dict[str, float]:
+def train_step(
+    batch: dict[str, torch.Tensor], learner_state: LearnerState
+) -> dict[str, float]:
     observation = [
         batch["node_inputs"],
         batch["node_padding_mask"],
@@ -439,7 +481,11 @@ def train_step(batch: dict[str, torch.Tensor], learner_state: LearnerState) -> d
 
     logp = learner_state.policy_wrapper(*observation)
     policy_loss = torch.sum(
-        logp.exp().unsqueeze(2) * (learner_state.log_alpha.exp().detach() * logp.unsqueeze(2) - q_values.detach()),
+        logp.exp().unsqueeze(2)
+        * (
+            learner_state.log_alpha.exp().detach() * logp.unsqueeze(2)
+            - q_values.detach()
+        ),
         dim=1,
     ).mean()
 
@@ -464,7 +510,10 @@ def train_step(batch: dict[str, torch.Tensor], learner_state: LearnerState) -> d
         ).unsqueeze(1)
         reward_for_target = batch["reward"]
         if learner_state.reward_baseline_kf is not None:
-            reward_for_target = batch["reward"] / learner_state.reward_baseline_kf.get_normalization_factor()
+            reward_for_target = (
+                batch["reward"]
+                / learner_state.reward_baseline_kf.get_normalization_factor()
+            )
 
         target_q = reward_for_target + GAMMA * (1 - batch["done"]) * value_prime
 
@@ -495,7 +544,9 @@ def train_step(batch: dict[str, torch.Tensor], learner_state: LearnerState) -> d
     learner_state.q_net2_optimizer.step()
 
     entropy = (logp * logp.exp()).sum(dim=-1)
-    alpha_loss = -(learner_state.log_alpha * (entropy.detach() + learner_state.entropy_target)).mean()
+    alpha_loss = -(
+        learner_state.log_alpha * (entropy.detach() + learner_state.entropy_target)
+    ).mean()
     learner_state.log_alpha_optimizer.zero_grad()
     alpha_loss.backward()
     learner_state.log_alpha_optimizer.step()
@@ -528,12 +579,16 @@ def train_step(batch: dict[str, torch.Tensor], learner_state: LearnerState) -> d
         learner_state.reward_baseline_kf.update(batch_reward)
         metrics["kf_reward_baseline"] = learner_state.reward_baseline_kf.get_baseline()
         metrics["kf_reward_std"] = learner_state.reward_baseline_kf.get_reward_std()
-        metrics["kf_reward_norm_factor"] = learner_state.reward_baseline_kf.get_normalization_factor()
+        metrics["kf_reward_norm_factor"] = (
+            learner_state.reward_baseline_kf.get_normalization_factor()
+        )
 
     return metrics
 
 
-def write_to_tensor_board(writer: SummaryWriter, tensorboard_data: list[dict], curr_episode: int) -> dict[str, float]:
+def write_to_tensor_board(
+    writer: SummaryWriter, tensorboard_data: list[dict], curr_episode: int
+) -> dict[str, float]:
     metrics = {}
     for key in tensorboard_data[0].keys():
         metrics[key] = float(np.nanmean([item[key] for item in tensorboard_data]))
@@ -543,24 +598,44 @@ def write_to_tensor_board(writer: SummaryWriter, tensorboard_data: list[dict], c
     writer.add_scalar("Losses/Alpha Loss", metrics["alpha_loss"], curr_episode)
     writer.add_scalar("Losses/Q Value Loss", metrics["q_value_loss"], curr_episode)
     writer.add_scalar("Losses/Entropy", metrics["entropy"], curr_episode)
-    writer.add_scalar("Losses/Policy Grad Norm", metrics["policy_grad_norm"], curr_episode)
-    writer.add_scalar("Losses/Q Value Grad Norm", metrics["q_value_grad_norm"], curr_episode)
+    writer.add_scalar(
+        "Losses/Policy Grad Norm", metrics["policy_grad_norm"], curr_episode
+    )
+    writer.add_scalar(
+        "Losses/Q Value Grad Norm", metrics["q_value_grad_norm"], curr_episode
+    )
     writer.add_scalar("Losses/Log Alpha", metrics["log_alpha"], curr_episode)
     if "kf_reward_baseline" in metrics:
-        writer.add_scalar("KF/Reward Baseline", metrics["kf_reward_baseline"], curr_episode)
+        writer.add_scalar(
+            "KF/Reward Baseline", metrics["kf_reward_baseline"], curr_episode
+        )
     if "kf_reward_std" in metrics:
         writer.add_scalar("KF/Reward Std", metrics["kf_reward_std"], curr_episode)
     if "kf_reward_norm_factor" in metrics:
-        writer.add_scalar("KF/Reward Norm Factor", metrics["kf_reward_norm_factor"], curr_episode)
+        writer.add_scalar(
+            "KF/Reward Norm Factor", metrics["kf_reward_norm_factor"], curr_episode
+        )
     return metrics
 
 
-def _write_eval_to_tensor_board(writer: SummaryWriter, eval_summary: dict[str, object], curr_episode: int) -> None:
-    writer.add_scalar("Eval/Explored Rate", float(eval_summary["explored_rate"]), curr_episode)
-    writer.add_scalar("Eval/Travel Distance", float(eval_summary["travel_dist"]), curr_episode)
-    writer.add_scalar("Eval/Success Rate", float(eval_summary["success_rate"]), curr_episode)
-    writer.add_scalar("Eval/Episode Return", float(eval_summary["episode_return"]), curr_episode)
-    writer.add_scalar("Eval/Steps Taken", float(eval_summary["steps_taken"]), curr_episode)
+def _write_eval_to_tensor_board(
+    writer: SummaryWriter, eval_summary: dict[str, object], curr_episode: int
+) -> None:
+    writer.add_scalar(
+        "Eval/Explored Rate", float(eval_summary["explored_rate"]), curr_episode
+    )
+    writer.add_scalar(
+        "Eval/Travel Distance", float(eval_summary["travel_dist"]), curr_episode
+    )
+    writer.add_scalar(
+        "Eval/Success Rate", float(eval_summary["success_rate"]), curr_episode
+    )
+    writer.add_scalar(
+        "Eval/Episode Return", float(eval_summary["episode_return"]), curr_episode
+    )
+    writer.add_scalar(
+        "Eval/Steps Taken", float(eval_summary["steps_taken"]), curr_episode
+    )
 
 
 def main(runtime_config: RuntimeConfig | None = None) -> dict:
@@ -574,10 +649,22 @@ def main(runtime_config: RuntimeConfig | None = None) -> dict:
     runtime_config = apply_runtime_config(runtime_config)
     ensure_output_dirs(runtime_config)
 
-    current_checkpoint_path = None if is_smoke_run(runtime_config) else get_checkpoint_path(runtime_config)
-    current_checkpoint_final_path = None if is_smoke_run(runtime_config) else get_checkpoint_final_path(runtime_config)
-    current_checkpoint_interrupted_path = None if is_smoke_run(runtime_config) else get_checkpoint_interrupted_path(runtime_config)
-    current_model_path = None if is_smoke_run(runtime_config) else get_model_path(runtime_config)
+    current_checkpoint_path = (
+        None if is_smoke_run(runtime_config) else get_checkpoint_path(runtime_config)
+    )
+    current_checkpoint_final_path = (
+        None
+        if is_smoke_run(runtime_config)
+        else get_checkpoint_final_path(runtime_config)
+    )
+    current_checkpoint_interrupted_path = (
+        None
+        if is_smoke_run(runtime_config)
+        else get_checkpoint_interrupted_path(runtime_config)
+    )
+    current_model_path = (
+        None if is_smoke_run(runtime_config) else get_model_path(runtime_config)
+    )
     current_eval_path = get_result_eval_path(runtime_config)
     current_train_path = get_train_path(runtime_config)
     current_gifs_path = get_gifs_path(runtime_config)
@@ -604,16 +691,12 @@ def main(runtime_config: RuntimeConfig | None = None) -> dict:
     learner_gpu_count = _resolve_learner_gpu_count(runtime_config, device)
     learner_device_ids = list(range(learner_gpu_count))
     worker_runtime_config, worker_gpu_share = _resolve_worker_runtime(runtime_config)
+    os.environ["PYTHONPATH"] = pythonpath
+    os.environ["LARGE_DRL_RAY_WORKER_NUM_CPUS"] = str(worker_num_cpus)
+    os.environ["LARGE_DRL_WORKER_NUM_THREADS"] = str(worker_num_threads)
+    os.environ.setdefault("MPLCONFIGDIR", "")
     ray_init_kwargs = {
         "ignore_reinit_error": True,
-        "runtime_env": {
-            "env_vars": {
-                "PYTHONPATH": pythonpath,
-                "LARGE_DRL_RAY_WORKER_NUM_CPUS": str(worker_num_cpus),
-                "LARGE_DRL_WORKER_NUM_THREADS": str(worker_num_threads),
-                "MPLCONFIGDIR": os.environ.get("MPLCONFIGDIR", ""),
-            }
-        },
     }
     if requested_ray_num_cpus is not None:
         ray_init_kwargs["num_cpus"] = requested_ray_num_cpus
@@ -637,13 +720,25 @@ def main(runtime_config: RuntimeConfig | None = None) -> dict:
     if checkpoint_source is not None:
         curr_episode = load_checkpoint(learner_state, checkpoint_source)
         next_episode = curr_episode
-        print(f"loading_model checkpoint={checkpoint_source} resume_episode={curr_episode}")
+        print(
+            f"loading_model checkpoint={checkpoint_source} resume_episode={curr_episode}"
+        )
 
-    learner_state.policy_wrapper = _wrap_data_parallel(learner_state.policy_net, learner_device_ids)
-    learner_state.q_net1_wrapper = _wrap_data_parallel(learner_state.q_net1, learner_device_ids)
-    learner_state.q_net2_wrapper = _wrap_data_parallel(learner_state.q_net2, learner_device_ids)
-    learner_state.target_q_net1_wrapper = _wrap_data_parallel(learner_state.target_q_net1, learner_device_ids)
-    learner_state.target_q_net2_wrapper = _wrap_data_parallel(learner_state.target_q_net2, learner_device_ids)
+    learner_state.policy_wrapper = _wrap_data_parallel(
+        learner_state.policy_net, learner_device_ids
+    )
+    learner_state.q_net1_wrapper = _wrap_data_parallel(
+        learner_state.q_net1, learner_device_ids
+    )
+    learner_state.q_net2_wrapper = _wrap_data_parallel(
+        learner_state.q_net2, learner_device_ids
+    )
+    learner_state.target_q_net1_wrapper = _wrap_data_parallel(
+        learner_state.target_q_net1, learner_device_ids
+    )
+    learner_state.target_q_net2_wrapper = _wrap_data_parallel(
+        learner_state.target_q_net2, learner_device_ids
+    )
 
     ray.init(**ray_init_kwargs)
     ray_started = True
@@ -654,7 +749,9 @@ def main(runtime_config: RuntimeConfig | None = None) -> dict:
     print(f"[Run] model_path={current_model_path}")
     print(f"[Run] train_path={current_train_path}")
     print(f"[Run] gifs_path={current_gifs_path}")
-    print(f"[Run] ray_num_cpus={requested_ray_num_cpus if requested_ray_num_cpus is not None else 'auto'}")
+    print(
+        f"[Run] ray_num_cpus={requested_ray_num_cpus if requested_ray_num_cpus is not None else 'auto'}"
+    )
     print(f"[Run] ray_worker_num_cpus={worker_num_cpus}")
     print(f"[Run] worker_num_threads={worker_num_threads}")
     print(
@@ -684,13 +781,34 @@ def main(runtime_config: RuntimeConfig | None = None) -> dict:
         next_episode += 1
         job_list.append(meta_agent.job.remote(weights_set, next_episode))
 
-    metric_names = ["travel_dist", "success_rate", "explored_rate", "episode_return", "episode_steps"]
+    metric_names = [
+        "travel_dist",
+        "success_rate",
+        "explored_rate",
+        "episode_return",
+        "episode_steps",
+    ]
+    metric_names += [
+        name
+        for name in SUMMARY_BENCHMARK_FIELDS
+        if name
+        in {
+            "distance_efficiency",
+            "step_efficiency",
+            "time_efficiency",
+            "mean_planning_time_ms",
+            "mean_graph_update_time_ms",
+            "mean_policy_inference_time_ms",
+            "mean_graph_rarefaction_time_ms",
+        }
+    ]
     perf_metrics = {name: [] for name in metric_names}
     experience_buffer = [[] for _ in range(len(ROLLOUT_BATCH_KEYS))]
     training_data = []
     latest_train_metrics = {}
     print(
         "training_start "
+        f"seed={runtime_config.seed} "
         f"max_episodes={runtime_config.max_episodes} "
         f"summary_window={runtime_config.summary_window} "
         f"minimum_buffer_size={runtime_config.minimum_buffer_size} "
@@ -728,12 +846,16 @@ def main(runtime_config: RuntimeConfig | None = None) -> dict:
 
             if next_episode < runtime_config.max_episodes:
                 next_episode += 1
-                job_list.append(meta_agents[info["id"]].job.remote(weights_set, next_episode))
+                job_list.append(
+                    meta_agents[info["id"]].job.remote(weights_set, next_episode)
+                )
 
             if len(experience_buffer[0]) >= runtime_config.minimum_buffer_size:
                 if len(experience_buffer[0]) >= runtime_config.replay_size:
                     for i in range(len(experience_buffer)):
-                        experience_buffer[i] = experience_buffer[i][-runtime_config.replay_size :]
+                        experience_buffer[i] = experience_buffer[i][
+                            -runtime_config.replay_size :
+                        ]
 
                 indices = list(range(len(experience_buffer[0])))
                 sample_batch_size = min(runtime_config.batch_size, len(indices))
@@ -741,23 +863,37 @@ def main(runtime_config: RuntimeConfig | None = None) -> dict:
                 for _ in range(runtime_config.train_updates_per_iter):
                     if sample_batch_size == 0:
                         break
-                    rollouts = sample_rollout_batch(experience_buffer, sample_batch_size, replace=False)
+                    rollouts = sample_rollout_batch(
+                        experience_buffer, sample_batch_size, replace=False
+                    )
                     batch = stack_batch_tensors(rollouts, learner_state.device)
                     latest_train_metrics = train_step(batch, learner_state)
                     if perf_metrics["travel_dist"]:
                         latest_train_metrics.update(
                             {
-                                "travel_dist": float(np.nanmean(perf_metrics["travel_dist"])),
-                                "success_rate": float(np.nanmean(perf_metrics["success_rate"])),
-                                "explored_rate": float(np.nanmean(perf_metrics["explored_rate"])),
-                                "episode_return": float(np.nanmean(perf_metrics["episode_return"])),
-                                "episode_steps": float(np.nanmean(perf_metrics["episode_steps"])),
+                                "travel_dist": float(
+                                    np.nanmean(perf_metrics["travel_dist"])
+                                ),
+                                "success_rate": float(
+                                    np.nanmean(perf_metrics["success_rate"])
+                                ),
+                                "explored_rate": float(
+                                    np.nanmean(perf_metrics["explored_rate"])
+                                ),
+                                "episode_return": float(
+                                    np.nanmean(perf_metrics["episode_return"])
+                                ),
+                                "episode_steps": float(
+                                    np.nanmean(perf_metrics["episode_steps"])
+                                ),
                             }
                         )
                     training_data.append(latest_train_metrics)
 
             if len(training_data) >= runtime_config.summary_window:
-                latest_train_metrics = write_to_tensor_board(writer, training_data, curr_episode)
+                latest_train_metrics = write_to_tensor_board(
+                    writer, training_data, curr_episode
+                )
                 if training_monitor is not None:
                     training_monitor.update_train(curr_episode, latest_train_metrics)
                     training_monitor.update_system(
@@ -774,7 +910,9 @@ def main(runtime_config: RuntimeConfig | None = None) -> dict:
                             float(np.nanmean(perf_metrics[name])),
                             curr_episode,
                         )
-                        latest_train_metrics[name] = float(np.nanmean(perf_metrics[name]))
+                        latest_train_metrics[name] = float(
+                            np.nanmean(perf_metrics[name])
+                        )
                 _print_train_progress(
                     curr_episode,
                     runtime_config.max_episodes,
@@ -787,7 +925,10 @@ def main(runtime_config: RuntimeConfig | None = None) -> dict:
 
             weights_set = [_state_dict_to_cpu(learner_state.policy_net)]
 
-            if current_checkpoint_path is not None and curr_episode % max(int(runtime_config.save_model_gap), 1) == 0:
+            if (
+                current_checkpoint_path is not None
+                and curr_episode % max(int(runtime_config.save_model_gap), 1) == 0
+            ):
                 _save_checkpoint(
                     learner_state,
                     runtime_config,
@@ -802,7 +943,10 @@ def main(runtime_config: RuntimeConfig | None = None) -> dict:
                     f"bucket={get_bucket_name(curr_episode, runtime_config.result_bucket_episodes)}"
                 )
 
-            if runtime_config.enable_auto_eval and runtime_config.auto_eval_map_count > 0:
+            if (
+                runtime_config.enable_auto_eval
+                and runtime_config.auto_eval_map_count > 0
+            ):
                 for episode_number in sorted(completed_episodes):
                     if episode_number % runtime_config.auto_eval_interval != 0:
                         continue
@@ -849,12 +993,21 @@ def main(runtime_config: RuntimeConfig | None = None) -> dict:
                 current_checkpoint_path,
                 current_model_path,
             )
-            torch.save(torch.load(current_checkpoint_path, map_location="cpu"), current_checkpoint_final_path)
-            print(f"final_model_saved checkpoint={current_checkpoint_path} final={current_checkpoint_final_path} episode={final_episode}")
+            torch.save(
+                torch.load(current_checkpoint_path, map_location="cpu"),
+                current_checkpoint_final_path,
+            )
+            print(
+                f"final_model_saved checkpoint={current_checkpoint_path} final={current_checkpoint_final_path} episode={final_episode}"
+            )
     except KeyboardInterrupt:
         saved = False
         try:
-            if current_checkpoint_path is not None and current_checkpoint_interrupted_path is not None and current_model_path is not None:
+            if (
+                current_checkpoint_path is not None
+                and current_checkpoint_interrupted_path is not None
+                and current_model_path is not None
+            ):
                 _saving_interrupt_checkpoint = True
                 _save_interrupt_checkpoint(
                     learner_state,
@@ -866,16 +1019,24 @@ def main(runtime_config: RuntimeConfig | None = None) -> dict:
                 )
                 saved = True
         except Exception as exc:
-            if current_checkpoint_path is not None and current_checkpoint_interrupted_path is not None and current_checkpoint_path.exists():
+            if (
+                current_checkpoint_path is not None
+                and current_checkpoint_interrupted_path is not None
+                and current_checkpoint_path.exists()
+            ):
                 try:
-                    shutil.copy2(current_checkpoint_path, current_checkpoint_interrupted_path)
+                    shutil.copy2(
+                        current_checkpoint_path, current_checkpoint_interrupted_path
+                    )
                     print(
                         f"interrupt_checkpoint_saved path={current_checkpoint_interrupted_path} "
                         f"episode={curr_episode} source=fallback_current_checkpoint error={exc}"
                     )
                     saved = True
                 except Exception as copy_exc:
-                    print(f"interrupt_checkpoint_save_failed error={exc} fallback_error={copy_exc}")
+                    print(
+                        f"interrupt_checkpoint_save_failed error={exc} fallback_error={copy_exc}"
+                    )
             else:
                 print(f"interrupt_checkpoint_save_failed error={exc}")
         finally:
@@ -892,12 +1053,24 @@ def main(runtime_config: RuntimeConfig | None = None) -> dict:
             ray.shutdown()
 
     return {
-        "checkpoint_path": str(current_checkpoint_path) if current_checkpoint_path is not None else None,
-        "checkpoint_final_path": str(current_checkpoint_final_path) if current_checkpoint_final_path is not None else None,
-        "checkpoint_interrupted_path": (
-            str(current_checkpoint_interrupted_path) if current_checkpoint_interrupted_path is not None else None
+        "checkpoint_path": (
+            str(current_checkpoint_path)
+            if current_checkpoint_path is not None
+            else None
         ),
-        "model_dir": str(current_model_path) if current_model_path is not None else None,
+        "checkpoint_final_path": (
+            str(current_checkpoint_final_path)
+            if current_checkpoint_final_path is not None
+            else None
+        ),
+        "checkpoint_interrupted_path": (
+            str(current_checkpoint_interrupted_path)
+            if current_checkpoint_interrupted_path is not None
+            else None
+        ),
+        "model_dir": (
+            str(current_model_path) if current_model_path is not None else None
+        ),
         "result_eval_dir": str(current_eval_path),
         "result_gif_dir": str(current_gifs_path),
         "train_dir": str(current_train_path),

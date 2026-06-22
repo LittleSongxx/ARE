@@ -63,24 +63,28 @@ class TestRewardBaselineKF:
         kf = RewardBaselineKF()
         assert kf.get_baseline() == pytest.approx(0.0)
 
-    def test_advantage_nonzero(self):
+    def test_update_changes_baseline(self):
         kf = RewardBaselineKF()
-        adv = kf.update_and_normalize(10.0)
-        assert adv != 0.0
+        kf.update(10.0)
+        assert kf.get_baseline() != 0.0
 
     def test_baseline_tracks_reward(self):
         kf = RewardBaselineKF()
         for _ in range(200):
-            kf.update_and_normalize(5.0)
+            kf.update(5.0)
         assert kf.get_baseline() == pytest.approx(5.0, abs=1.0)
 
-    def test_advantage_stabilizes(self):
+    def test_normalization_factor_floor(self):
         kf = RewardBaselineKF()
-        advantages = []
-        for _ in range(200):
-            adv = kf.update_and_normalize(5.0)
-            advantages.append(adv)
-        assert abs(advantages[-1]) < abs(advantages[0])
+        assert kf.get_normalization_factor() >= 1.0
+        kf.update(0.1)
+        assert kf.get_normalization_factor() >= 1.0
+
+    def test_reward_std_positive(self):
+        kf = RewardBaselineKF()
+        for v in [1.0, 2.0, 3.0, 4.0, 5.0]:
+            kf.update(v)
+        assert kf.get_reward_std() >= 0.0
 
 
 class TestTargetQSoftTracker:

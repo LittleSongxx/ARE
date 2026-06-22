@@ -15,6 +15,7 @@ UPDATING_MAP_SIZE = 4 * SENSOR_RANGE + 4 * NODE_RESOLUTION  # the minimal map th
 NODE_INPUT_DIM = 4
 EMBEDDING_DIM = 128
 K_SIZE = 25
+NODE_PADDING_SIZE = 360
 
 THR_TO_WAYPOINT = 1 # meter, the waypoint will be considered as arrived if the robot is closer than this value
 THR_NEXT_WAYPOINT = 5 # meter, the planner will try to plan a waypoint farther than this value

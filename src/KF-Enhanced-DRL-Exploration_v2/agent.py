@@ -9,10 +9,8 @@ from node_manager import NodeManager
 from parameter import (
     CELL_SIZE, FRONTIER_CELL_SIZE, K_SIZE, NODE_PADDING_SIZE, NODE_RESOLUTION,
     SENSOR_RANGE, UPDATING_MAP_SIZE,
-    ENABLE_GRAPH_RAREFACTION, ENABLE_POSITION_KF,
+    ENABLE_GRAPH_RAREFACTION, ENABLE_POSITION_KF, ENABLE_KF_UTILITY_PREDICTION,
     KF_POSITION_PROCESS_NOISE, KF_POSITION_MEASUREMENT_NOISE,
-    ENABLE_KF_EXPLORATION_BONUS, KF_EXPLORATION_BONUS_WEIGHT,
-    ENABLE_KF_UTILITY_PREDICTION,
 )
 from utils import MapInfo, get_cell_position_from_coords, get_frontier_in_map
 
@@ -142,12 +140,17 @@ class Agent:
         ) = self.update_observation()
 
     def _build_dense_graph(self):
-        """Collect all nodes from the quadtree into dense arrays."""
+        """Collect all nodes from the quadtree into dense arrays.
+
+        Returns raw utility (for graph rarefaction anchor decisions) and
+        KF-predicted utility (for policy observation input) separately.
+        """
         all_node_coords = []
         for node in self.node_manager.nodes_dict.__iter__():
             all_node_coords.append(node.data.coords)
         all_node_coords = np.array(all_node_coords).reshape(-1, 2)
         utility = []
+        predicted_utility = []
         guidepost = []
 
         n_nodes = all_node_coords.shape[0]
@@ -155,34 +158,32 @@ class Agent:
         node_coords_to_check = all_node_coords[:, 0] + all_node_coords[:, 1] * 1j
         for i, coords in enumerate(all_node_coords):
             node = self.node_manager.nodes_dict.find((coords[0], coords[1])).data
-            if ENABLE_KF_UTILITY_PREDICTION and node.utility_kf is not None:
-                node_utility = float(node.predicted_utility)
-            else:
-                node_utility = float(node.utility)
-            if ENABLE_KF_EXPLORATION_BONUS and node_utility > 0:
-                node_utility += KF_EXPLORATION_BONUS_WEIGHT * node.get_utility_uncertainty()
-            utility.append(node_utility)
+            utility.append(node.utility)
+            predicted_utility.append(node.predicted_utility)
             guidepost.append(node.visited)
             for neighbor in node.neighbor_set:
                 index = np.argwhere(node_coords_to_check == neighbor[0] + neighbor[1] * 1j)[0][0]
                 adjacent_matrix[i, index] = 0
 
         utility = np.array(utility)
+        predicted_utility = np.array(predicted_utility)
         guidepost = np.array(guidepost)
         current_index = int(
             np.argwhere(node_coords_to_check == self.location[0] + self.location[1] * 1j)[0][0]
         )
-        return all_node_coords, utility, guidepost, adjacent_matrix, current_index
+        return all_node_coords, utility, predicted_utility, guidepost, adjacent_matrix, current_index
 
     def update_observation(self):
-        dense_coords, dense_utility, dense_guidepost, dense_adj, dense_current = (
+        dense_coords, dense_utility, dense_pred_utility, dense_guidepost, dense_adj, dense_current = (
             self._build_dense_graph()
         )
 
         if ENABLE_GRAPH_RAREFACTION and dense_coords.shape[0] > NODE_PADDING_SIZE:
+            scoring = dense_pred_utility if ENABLE_KF_UTILITY_PREDICTION else None
             selected, sparse_adj = graph_rarefaction(
                 dense_coords, dense_utility, dense_adj, dense_current,
                 max_nodes=NODE_PADDING_SIZE - 1,
+                scoring_utility=scoring,
             )
             node_coords = dense_coords[selected]
             utility = dense_utility[selected]

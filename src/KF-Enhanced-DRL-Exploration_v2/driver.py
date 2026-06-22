@@ -17,17 +17,12 @@ import torch.optim as optim
 from torch.utils.tensorboard import SummaryWriter
 
 from evaluation import evaluate_policy, get_evaluated_episodes, save_evaluation_summary, summarize_eval_results
-from kalman_filter import RewardBaselineKF, ScalarKalmanFilter
+from kalman_filter import RewardBaselineKF
 from model import PolicyNet, QNet
 from parameter import (
     ENABLE_KF_REWARD_BASELINE,
     KF_REWARD_PROCESS_NOISE,
     KF_REWARD_MEASUREMENT_NOISE,
-    ENABLE_KF_TARGET_SOFT_UPDATE,
-    KF_TARGET_TAU,
-    ENABLE_SUCCESSOR_FEATURES,
-    SF_KF_PROCESS_NOISE,
-    SF_KF_MEASUREMENT_NOISE,
     BATCH_SIZE,
     CRITIC_NODE_INPUT_DIM,
     EMBEDDING_DIM,
@@ -136,8 +131,6 @@ class LearnerState:
     entropy_target: float
     device: torch.device
     reward_baseline_kf: RewardBaselineKF = None
-    sf_reward_optimizer: optim.Optimizer | None = None
-    sf_reward_kf: ScalarKalmanFilter | None = None
     update_step: int = 0
     target_q_update_counter: int = 1
 
@@ -146,17 +139,6 @@ class LearnerState:
             self.reward_baseline_kf = RewardBaselineKF(
                 process_noise=KF_REWARD_PROCESS_NOISE,
                 measurement_noise=KF_REWARD_MEASUREMENT_NOISE,
-            )
-        if self.sf_reward_optimizer is None and ENABLE_SUCCESSOR_FEATURES:
-            reward_head = getattr(self.q_net1, 'reward_head', None)
-            if reward_head is not None:
-                self.sf_reward_optimizer = optim.Adam(reward_head.parameters(), lr=LR)
-        if self.sf_reward_kf is None and ENABLE_SUCCESSOR_FEATURES:
-            self.sf_reward_kf = ScalarKalmanFilter(
-                initial_state=0.0,
-                initial_variance=1.0,
-                process_noise=SF_KF_PROCESS_NOISE,
-                measurement_noise=SF_KF_MEASUREMENT_NOISE,
             )
 
 
@@ -482,8 +464,7 @@ def train_step(batch: dict[str, torch.Tensor], learner_state: LearnerState) -> d
         ).unsqueeze(1)
         reward_for_target = batch["reward"]
         if learner_state.reward_baseline_kf is not None:
-            kf_baseline = learner_state.reward_baseline_kf.get_baseline()
-            reward_for_target = batch["reward"] - kf_baseline
+            reward_for_target = batch["reward"] / learner_state.reward_baseline_kf.get_normalization_factor()
         target_q = reward_for_target + GAMMA * (1 - batch["done"]) * value_prime
 
     mse_loss = nn.MSELoss()
@@ -518,20 +499,13 @@ def train_step(batch: dict[str, torch.Tensor], learner_state: LearnerState) -> d
     alpha_loss.backward()
     learner_state.log_alpha_optimizer.step()
 
-    if ENABLE_KF_TARGET_SOFT_UPDATE:
-        tau = KF_TARGET_TAU
-        for p_t, p_o in zip(learner_state.target_q_net1.parameters(), learner_state.q_net1.parameters()):
-            p_t.data.mul_(1.0 - tau).add_(tau * p_o.data)
-        for p_t, p_o in zip(learner_state.target_q_net2.parameters(), learner_state.q_net2.parameters()):
-            p_t.data.mul_(1.0 - tau).add_(tau * p_o.data)
-    else:
-        learner_state.target_q_update_counter += 1
-        if learner_state.target_q_update_counter > TARGET_Q_UPDATE_INTERVAL:
-            learner_state.target_q_update_counter = 1
-            learner_state.target_q_net1.load_state_dict(learner_state.q_net1.state_dict())
-            learner_state.target_q_net2.load_state_dict(learner_state.q_net2.state_dict())
-            learner_state.target_q_net1.eval()
-            learner_state.target_q_net2.eval()
+    learner_state.target_q_update_counter += 1
+    if learner_state.target_q_update_counter > TARGET_Q_UPDATE_INTERVAL:
+        learner_state.target_q_update_counter = 1
+        learner_state.target_q_net1.load_state_dict(learner_state.q_net1.state_dict())
+        learner_state.target_q_net2.load_state_dict(learner_state.q_net2.state_dict())
+        learner_state.target_q_net1.eval()
+        learner_state.target_q_net2.eval()
 
     learner_state.update_step += 1
 
@@ -550,36 +524,10 @@ def train_step(batch: dict[str, torch.Tensor], learner_state: LearnerState) -> d
     }
 
     if learner_state.reward_baseline_kf is not None:
-        kf_advantage = learner_state.reward_baseline_kf.update_and_normalize(batch_reward)
+        learner_state.reward_baseline_kf.update(batch_reward)
         metrics["kf_reward_baseline"] = learner_state.reward_baseline_kf.get_baseline()
-        metrics["kf_reward_uncertainty"] = learner_state.reward_baseline_kf.get_uncertainty()
-        metrics["kf_advantage"] = kf_advantage
-
-    if ENABLE_SUCCESSOR_FEATURES:
-        q1_sf = learner_state.q_net1.get_successor_features()
-        if q1_sf is not None:
-            current_idx = batch["critic_current_index"]
-            embedding_dim_sf = q1_sf.size(-1)
-            current_sf = torch.gather(q1_sf, 1, current_idx.repeat(1, 1, embedding_dim_sf))
-            current_reward_pred = learner_state.q_net1.predict_reward_from_sf(current_sf.detach())
-            sf_reward_loss_raw = nn.MSELoss()(current_reward_pred, batch["reward"].detach())
-            sf_reward_loss = sf_reward_loss_raw
-            if learner_state.sf_reward_kf is not None:
-                sf_loss_val = sf_reward_loss_raw.item()
-                learner_state.sf_reward_kf.update(sf_loss_val)
-                sf_kf_baseline = max(learner_state.sf_reward_kf.get_state(), 1e-6)
-                sf_kf_uncertainty = learner_state.sf_reward_kf.get_uncertainty()
-                relative_uncertainty = min(sf_kf_uncertainty / sf_kf_baseline, 2.0)
-                sf_loss_weight = 1.0 + relative_uncertainty
-                sf_reward_loss = sf_reward_loss_raw * sf_loss_weight
-                metrics["sf_kf_loss_weight"] = sf_loss_weight
-                metrics["sf_kf_uncertainty"] = sf_kf_uncertainty
-                metrics["sf_kf_baseline"] = learner_state.sf_reward_kf.get_state()
-            if learner_state.sf_reward_optimizer is not None:
-                learner_state.sf_reward_optimizer.zero_grad()
-                sf_reward_loss.backward()
-                learner_state.sf_reward_optimizer.step()
-            metrics["sf_reward_loss"] = sf_reward_loss_raw.item()
+        metrics["kf_reward_std"] = learner_state.reward_baseline_kf.get_reward_std()
+        metrics["kf_reward_norm_factor"] = learner_state.reward_baseline_kf.get_normalization_factor()
 
     return metrics
 
@@ -599,16 +547,10 @@ def write_to_tensor_board(writer: SummaryWriter, tensorboard_data: list[dict], c
     writer.add_scalar("Losses/Log Alpha", metrics["log_alpha"], curr_episode)
     if "kf_reward_baseline" in metrics:
         writer.add_scalar("KF/Reward Baseline", metrics["kf_reward_baseline"], curr_episode)
-    if "kf_reward_uncertainty" in metrics:
-        writer.add_scalar("KF/Reward Uncertainty", metrics["kf_reward_uncertainty"], curr_episode)
-    if "kf_advantage" in metrics:
-        writer.add_scalar("KF/Advantage", metrics["kf_advantage"], curr_episode)
-    if "sf_reward_loss" in metrics:
-        writer.add_scalar("SF/Reward Prediction Loss", metrics["sf_reward_loss"], curr_episode)
-    if "sf_kf_loss_weight" in metrics:
-        writer.add_scalar("SF/KF Loss Weight", metrics["sf_kf_loss_weight"], curr_episode)
-    if "sf_kf_uncertainty" in metrics:
-        writer.add_scalar("SF/KF Uncertainty", metrics["sf_kf_uncertainty"], curr_episode)
+    if "kf_reward_std" in metrics:
+        writer.add_scalar("KF/Reward Std", metrics["kf_reward_std"], curr_episode)
+    if "kf_reward_norm_factor" in metrics:
+        writer.add_scalar("KF/Reward Norm Factor", metrics["kf_reward_norm_factor"], curr_episode)
     return metrics
 
 
@@ -661,16 +603,12 @@ def main(runtime_config: RuntimeConfig | None = None) -> dict:
     learner_gpu_count = _resolve_learner_gpu_count(runtime_config, device)
     learner_device_ids = list(range(learner_gpu_count))
     worker_runtime_config, worker_gpu_share = _resolve_worker_runtime(runtime_config)
+    os.environ["PYTHONPATH"] = pythonpath
+    os.environ["LARGE_DRL_RAY_WORKER_NUM_CPUS"] = str(worker_num_cpus)
+    os.environ["LARGE_DRL_WORKER_NUM_THREADS"] = str(worker_num_threads)
+    os.environ.setdefault("MPLCONFIGDIR", "")
     ray_init_kwargs = {
         "ignore_reinit_error": True,
-        "runtime_env": {
-            "env_vars": {
-                "PYTHONPATH": pythonpath,
-                "LARGE_DRL_RAY_WORKER_NUM_CPUS": str(worker_num_cpus),
-                "LARGE_DRL_WORKER_NUM_THREADS": str(worker_num_threads),
-                "MPLCONFIGDIR": os.environ.get("MPLCONFIGDIR", ""),
-            }
-        },
     }
     if requested_ray_num_cpus is not None:
         ray_init_kwargs["num_cpus"] = requested_ray_num_cpus

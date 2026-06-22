@@ -2,8 +2,6 @@ import torch
 import torch.nn as nn
 import math
 
-from parameter import ENABLE_SUCCESSOR_FEATURES, SF_FEATURE_DIM, SF_REWARD_HEAD_DIM
-
 
 # a pointer network layer for policy output
 class SingleHeadAttention(nn.Module):
@@ -207,17 +205,12 @@ class Decoder(nn.Module):
 
 
 class PolicyNet(nn.Module):
-    def __init__(self, node_dim, embedding_dim, use_sf=ENABLE_SUCCESSOR_FEATURES):
+    def __init__(self, node_dim, embedding_dim):
         super(PolicyNet, self).__init__()
-        self.use_sf = use_sf
 
         # graph encoder
         self.initial_embedding = nn.Linear(node_dim, embedding_dim)
         self.encoder = Encoder(embedding_dim=embedding_dim, n_head=8, n_layer=6)
-
-        if self.use_sf:
-            self.sf_projector = nn.Linear(embedding_dim, SF_FEATURE_DIM)
-            self.sf_to_embedding = nn.Linear(SF_FEATURE_DIM, embedding_dim)
 
         # decoder
         self.decoder = Decoder(embedding_dim=embedding_dim, n_head=8, n_layer=1)
@@ -232,16 +225,7 @@ class PolicyNet(nn.Module):
                                                          key_padding_mask=node_padding_mask,
                                                          attn_mask=edge_mask)
 
-        if self.use_sf:
-            self._last_sf = self.sf_projector(enhanced_node_feature)
-            enhanced_node_feature = self.sf_to_embedding(self._last_sf)
-
         return enhanced_node_feature
-
-    def get_successor_features(self):
-        if self.use_sf and hasattr(self, '_last_sf'):
-            return self._last_sf
-        return None
 
     def decode_state(self, enhanced_node_feature, current_index, node_padding_mask):
         embedding_dim = enhanced_node_feature.size()[2]
@@ -280,22 +264,12 @@ class PolicyNet(nn.Module):
 
 
 class QNet(nn.Module):
-    def __init__(self, node_dim, embedding_dim, use_sf=ENABLE_SUCCESSOR_FEATURES):
+    def __init__(self, node_dim, embedding_dim):
         super(QNet, self).__init__()
-        self.use_sf = use_sf
 
         # graph encoder
         self.initial_embedding = nn.Linear(node_dim, embedding_dim)
         self.encoder = Encoder(embedding_dim=embedding_dim, n_head=8, n_layer=6)
-
-        if self.use_sf:
-            self.sf_projector = nn.Linear(embedding_dim, SF_FEATURE_DIM)
-            self.sf_to_embedding = nn.Linear(SF_FEATURE_DIM, embedding_dim)
-            self.reward_head = nn.Sequential(
-                nn.Linear(SF_FEATURE_DIM, SF_REWARD_HEAD_DIM),
-                nn.ReLU(inplace=True),
-                nn.Linear(SF_REWARD_HEAD_DIM, 1),
-            )
 
         # decoder
         self.decoder = Decoder(embedding_dim=embedding_dim, n_head=8, n_layer=1)
@@ -308,21 +282,7 @@ class QNet(nn.Module):
                                                          key_padding_mask=node_padding_mask,
                                                          attn_mask=edge_mask)
 
-        if self.use_sf:
-            self._last_sf = self.sf_projector(enhanced_node_feature)
-            enhanced_node_feature = self.sf_to_embedding(self._last_sf)
-
         return enhanced_node_feature
-
-    def get_successor_features(self):
-        if self.use_sf and hasattr(self, '_last_sf'):
-            return self._last_sf
-        return None
-
-    def predict_reward_from_sf(self, sf):
-        if self.use_sf:
-            return self.reward_head(sf)
-        return None
 
     def decode_state(self, enhanced_node_feature, current_index, node_padding_mask):
         embedding_dim = enhanced_node_feature.size()[2]
