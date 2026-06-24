@@ -18,6 +18,9 @@
 #include <message_filters/sync_policies/exact_time.h>
 #include <message_filters/sync_policies/approximate_time.h>
 #include <message_filters/synchronizer.h>
+#include <algorithm>
+#include <cmath>
+#include <string>
 
 class OctoMapToGridMap {
 public:
@@ -34,6 +37,10 @@ public:
         nh_.param("miss_min", miss_min_, 0.1f);
         nh_.param("remove_dyn_obs", remove_dyn_obs_, true);
         nh_.param("obstacle_height_thr", obstacle_height_thr_, 0.2f);
+        nh_.param("publish_risk_grid", publish_risk_grid_, true);
+        nh_.param<std::string>("risk_topic", risk_topic_, "/terrain_risk_grid");
+        nh_.param("terrain_risk_height_scale", terrain_risk_height_scale_, 0.15f);
+        nh_.param("obstacle_risk_value", obstacle_risk_value_, 100);
 
         nh_.param("use_bounding_box", use_bounding_box_, false);
         nh_.param("bounding_box_min_x", bounding_box_x_min_, -20.0);
@@ -72,6 +79,9 @@ public:
         sync_->registerCallback(boost::bind(&OctoMapToGridMap::pointCloudCallback, this, _1, _2));
         
         gridmap_pub_ = nh_.advertise<nav_msgs::OccupancyGrid>("/grid_map", 1);
+        if (publish_risk_grid_) {
+            risk_grid_pub_ = nh_.advertise<nav_msgs::OccupancyGrid>(risk_topic_, 1);
+        }
     }
 
     void pointCloudCallback(const sensor_msgs::PointCloud2::ConstPtr& terrain_msg,
@@ -140,6 +150,7 @@ public:
         if (terrain_cloud.empty()) {
             return;
         }
+        latest_terrain_cloud_ = terrain_cloud;
         octomap::point3d robot_position(robot_x_, robot_y_, robot_z_);
 
         // Process the downsampled point cloud
@@ -277,6 +288,12 @@ public:
         grid_msg.info.origin.position.y = rounded_robot_y - grid_size_m_ / 2.0;
         grid_msg.info.origin.position.z = robot_z_ - 0.75;
         grid_msg.data.assign(grid_size_ * grid_size_, -1);
+        nav_msgs::OccupancyGrid risk_msg;
+        if (publish_risk_grid_) {
+            risk_msg.header = grid_msg.header;
+            risk_msg.info = grid_msg.info;
+            risk_msg.data.assign(grid_size_ * grid_size_, -1);
+        }
         double inv_res = 1.0 / grid_res_;
         double origin_x = rounded_robot_x - grid_size_m_ / 2.0;
         double origin_y = rounded_robot_y - grid_size_m_ / 2.0;
@@ -299,6 +316,9 @@ public:
 
             if (size <= grid_res_) {
                 grid_msg.data[y * grid_size_ + x] = 0; // Free
+                if (publish_risk_grid_) {
+                    risk_msg.data[y * grid_size_ + x] = std::max<int8_t>(risk_msg.data[y * grid_size_ + x], 0);
+                }
             } else {
                 int scale = std::ceil(size / grid_res_);
                 int half_scale = scale / 2;
@@ -308,6 +328,9 @@ public:
                         int iy = y + dy;
                         if (ix >= 0 && ix < grid_size_ && iy >= 0 && iy < grid_size_) {
                             grid_msg.data[iy * grid_size_ + ix] = 0;
+                            if (publish_risk_grid_) {
+                                risk_msg.data[iy * grid_size_ + ix] = std::max<int8_t>(risk_msg.data[iy * grid_size_ + ix], 0);
+                            }
                         }
                     }
                 }
@@ -329,6 +352,9 @@ public:
 
                 if (size <= grid_res_) {
                     grid_msg.data[y * grid_size_ + x] = 0;
+                    if (publish_risk_grid_) {
+                        risk_msg.data[y * grid_size_ + x] = std::max<int8_t>(risk_msg.data[y * grid_size_ + x], 0);
+                    }
                 } else {
                     int scale = std::ceil(size / grid_res_);
                     int half_scale = scale / 2;
@@ -338,10 +364,32 @@ public:
                             int iy = y + dy;
                             if (ix >= 0 && ix < grid_size_ && iy >= 0 && iy < grid_size_) {
                                 grid_msg.data[iy * grid_size_ + ix] = 0;
+                                if (publish_risk_grid_) {
+                                    risk_msg.data[iy * grid_size_ + ix] = std::max<int8_t>(risk_msg.data[iy * grid_size_ + ix], 0);
+                                }
                             }
                         }
                     }
                 }
+            }
+        }
+
+        // -------- Terrain intensity risk --------
+        if (publish_risk_grid_) {
+            const float height_scale = std::max(terrain_risk_height_scale_, 1e-3f);
+            for (const auto& point : latest_terrain_cloud_.points) {
+                if (std::isnan(point.x) || std::isnan(point.y) || std::isnan(point.z)) {
+                    continue;
+                }
+                int x = static_cast<int>((point.x - origin_x) * inv_res);
+                int y = static_cast<int>((point.y - origin_y) * inv_res);
+                if (x < 0 || x >= grid_size_ || y < 0 || y >= grid_size_) {
+                    continue;
+                }
+                int risk_value = static_cast<int>(std::round(std::abs(point.intensity) / height_scale * 99.0f));
+                risk_value = std::max(0, std::min(99, risk_value));
+                int index = y * grid_size_ + x;
+                risk_msg.data[index] = std::max<int8_t>(risk_msg.data[index], static_cast<int8_t>(risk_value));
             }
         }
 
@@ -359,6 +407,9 @@ public:
 
             if (size <= grid_res_) {
                 grid_msg.data[y * grid_size_ + x] = 100; // Occupied
+                if (publish_risk_grid_) {
+                    risk_msg.data[y * grid_size_ + x] = static_cast<int8_t>(obstacle_risk_value_);
+                }
             } else {
                 int scale = std::ceil(size / grid_res_);
                 int half_scale = scale / 2;
@@ -368,6 +419,9 @@ public:
                         int iy = y + dy;
                         if (ix >= 0 && ix < grid_size_ && iy >= 0 && iy < grid_size_) {
                             grid_msg.data[iy * grid_size_ + ix] = 100;
+                            if (publish_risk_grid_) {
+                                risk_msg.data[iy * grid_size_ + ix] = static_cast<int8_t>(obstacle_risk_value_);
+                            }
                         }
                     }
                 }
@@ -376,6 +430,9 @@ public:
 
 
         gridmap_pub_.publish(grid_msg);
+        if (publish_risk_grid_) {
+            risk_grid_pub_.publish(risk_msg);
+        }
     }
 
 
@@ -388,6 +445,7 @@ private:
     std::shared_ptr<message_filters::Synchronizer<SyncPolicy>> sync_;
 
     ros::Publisher gridmap_pub_;
+    ros::Publisher risk_grid_pub_;
     octomap::OcTree obstacle_tree_; // Stores obstacles
     octomap::OcTree free_tree_;     // Stores traversable space
     octomap::OcTree scan_tree_;
@@ -411,6 +469,11 @@ private:
     tf2_ros::TransformListener tf_listener_;
     bool remove_dyn_obs_;
     float obstacle_height_thr_;
+    bool publish_risk_grid_;
+    std::string risk_topic_;
+    float terrain_risk_height_scale_;
+    int obstacle_risk_value_;
+    pcl::PointCloud<pcl::PointXYZI> latest_terrain_cloud_;
     bool use_bounding_box_;
     double bounding_box_x_min_;
     double bounding_box_y_min_;

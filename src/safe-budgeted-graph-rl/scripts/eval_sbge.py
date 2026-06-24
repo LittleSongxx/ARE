@@ -1,0 +1,38 @@
+#!/usr/bin/env python3
+from __future__ import annotations
+
+import argparse
+import sys
+from pathlib import Path
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
+from sbge.config import SBGEConfig
+from sbge.eval import evaluate_checkpoint
+
+
+def parse_args():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--checkpoint", required=True)
+    parser.add_argument("--episodes", type=int, default=5)
+    parser.add_argument("--seed", type=int, default=0)
+    parser.add_argument("--maps-dir")
+    parser.add_argument("--output-dir")
+    parser.add_argument("--device", default="cpu")
+    return parser.parse_args()
+
+
+def main():
+    args = parse_args()
+    config = SBGEConfig(seed=args.seed, device=args.device)
+    if args.maps_dir:
+        config = config.with_overrides(maps_dir=args.maps_dir)
+    summary = evaluate_checkpoint(config, args.checkpoint, args.episodes, output_dir=args.output_dir)
+    print(f"mean_explored_rate={summary['mean_explored_rate']:.4f}")
+    print(f"mean_episode_cost={summary['mean_episode_cost']:.4f}")
+
+
+if __name__ == "__main__":
+    main()
