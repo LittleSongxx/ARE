@@ -21,6 +21,10 @@ def parse_args():
     parser.add_argument("--maps-dir")
     parser.add_argument("--output-dir")
     parser.add_argument("--device", default="cpu")
+    parser.add_argument("--split-file")
+    parser.add_argument("--split", choices=["train", "val", "test"], default="test")
+    parser.add_argument("--map-limit", type=int)
+    parser.add_argument("--experiment-name", default="sbge")
     return parser.parse_args()
 
 
@@ -29,6 +33,12 @@ def main():
     config = SBGEConfig(seed=args.seed, device=args.device)
     if args.maps_dir:
         config = config.with_overrides(maps_dir=args.maps_dir)
+    config = config.with_overrides(
+        split_file=args.split_file,
+        split_name=args.split,
+        map_limit=args.map_limit,
+        experiment_name=args.experiment_name,
+    )
     summary = evaluate_checkpoint(config, args.checkpoint, args.episodes, output_dir=args.output_dir)
     print(f"mean_explored_rate={summary['mean_explored_rate']:.4f}")
     print(f"mean_episode_cost={summary['mean_episode_cost']:.4f}")

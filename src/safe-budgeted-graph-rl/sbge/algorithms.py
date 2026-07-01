@@ -235,8 +235,9 @@ class ConstrainedSACAgent:
 
 def _serializable_config(config: SBGEConfig) -> dict[str, Any]:
     payload = asdict(config)
-    for key in ("maps_dir", "result_dir"):
-        payload[key] = str(payload[key])
+    for key in ("maps_dir", "result_dir", "split_file"):
+        if payload.get(key) is not None:
+            payload[key] = str(payload[key])
     return payload
 
 

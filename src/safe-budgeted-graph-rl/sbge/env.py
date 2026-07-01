@@ -5,7 +5,8 @@ from pathlib import Path
 import numpy as np
 
 from .config import SBGEConfig
-from .map_utils import FREE, OCCUPIED, UNKNOWN, bresenham_cells, in_bounds, list_map_files, load_large_drl_map
+from .map_utils import FREE, OCCUPIED, UNKNOWN, bresenham_cells, in_bounds, load_large_drl_map
+from .splits import load_map_files_for_config
 from .types import StepResult
 
 try:
@@ -20,7 +21,7 @@ class SafeBudgetedGraphEnv:
         self.config = config
         self.seed = config.seed if seed is None else int(seed)
         self.rng = np.random.default_rng(self.seed)
-        self.map_files = list_map_files(config.maps_dir)
+        self.map_files = load_map_files_for_config(config)
         self.forced_map_path = Path(forced_map_path).expanduser().resolve() if forced_map_path else None
 
         self.map_path: Path | None = None

@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import csv
-import json
 import random
 from pathlib import Path
 
@@ -12,6 +10,7 @@ from .algorithms import ConstrainedSACAgent, ReplayBuffer, transition_from_obser
 from .config import SBGEConfig
 from .env import SafeBudgetedGraphEnv
 from .graph import SafeGraphBuilder
+from .results import config_to_dict, write_csv, write_json
 from .types import EpisodeMetrics
 
 
@@ -80,6 +79,7 @@ def train(config: SBGEConfig, episodes: int, output_dir: str | Path | None = Non
     graph_builder = SafeGraphBuilder(config)
     output_path = Path(output_dir) if output_dir is not None else config.result_dir / "sbge_train"
     output_path.mkdir(parents=True, exist_ok=True)
+    write_json(output_path / "config.json", config_to_dict(config))
 
     episode_rows: list[dict[str, float | int]] = []
     train_rows: list[dict[str, float | int]] = []
@@ -107,11 +107,10 @@ def train(config: SBGEConfig, episodes: int, output_dir: str | Path | None = Non
 
     checkpoint_path = output_path / "checkpoint.pt"
     agent.save(checkpoint_path)
-    _write_json(output_path / "episodes.json", episode_rows)
-    _write_csv(output_path / "episodes.csv", episode_rows)
-    _write_json(output_path / "train_updates.json", train_rows)
-    if train_rows:
-        _write_csv(output_path / "train_updates.csv", train_rows)
+    write_json(output_path / "episodes.json", episode_rows)
+    write_csv(output_path / "episodes.csv", episode_rows)
+    write_json(output_path / "train_updates.json", train_rows)
+    write_csv(output_path / "train_updates.csv", train_rows)
     summary = {
         "episodes": int(episodes),
         "total_steps": int(total_steps),
@@ -120,20 +119,5 @@ def train(config: SBGEConfig, episodes: int, output_dir: str | Path | None = Non
         "mean_return_success": float(np.mean([row["return_success"] for row in episode_rows])) if episode_rows else 0.0,
         "mean_budget_violation": float(np.mean([row["budget_violation"] for row in episode_rows])) if episode_rows else 0.0,
     }
-    _write_json(output_path / "summary.json", summary)
+    write_json(output_path / "summary.json", summary)
     return summary
-
-
-def _write_json(path: Path, payload) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(payload, indent=2, sort_keys=True))
-
-
-def _write_csv(path: Path, rows: list[dict]) -> None:
-    if not rows:
-        return
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("w", newline="") as handle:
-        writer = csv.DictWriter(handle, fieldnames=list(rows[0].keys()))
-        writer.writeheader()
-        writer.writerows(rows)

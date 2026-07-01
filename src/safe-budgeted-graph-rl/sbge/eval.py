@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 from pathlib import Path
 
 import numpy as np
@@ -9,6 +8,7 @@ from .algorithms import ConstrainedSACAgent
 from .config import SBGEConfig
 from .env import SafeBudgetedGraphEnv
 from .graph import SafeGraphBuilder
+from .results import config_to_dict, write_csv, write_json
 from .train_loop import run_episode, set_global_seeds
 
 
@@ -38,5 +38,8 @@ def evaluate_checkpoint(
     if output_dir is not None:
         path = Path(output_dir)
         path.mkdir(parents=True, exist_ok=True)
-        (path / "eval_results.json").write_text(json.dumps(summary, indent=2, sort_keys=True))
+        write_json(path / "config.json", config_to_dict(config))
+        write_json(path / "eval_summary.json", {key: value for key, value in summary.items() if key != "rows"})
+        write_json(path / "eval_results.json", summary)
+        write_csv(path / "eval_results.csv", rows)
     return summary

@@ -9,6 +9,7 @@ SRC_ROOT = PACKAGE_ROOT.parent
 WORKSPACE_ROOT = SRC_ROOT.parent
 DEFAULT_MAPS_DIR = SRC_ROOT / "large-scale-DRL-exploration" / "maps"
 DEFAULT_RESULT_DIR = PACKAGE_ROOT / "result"
+DEFAULT_SPLIT_FILE = PACKAGE_ROOT / "splits" / "default_seed0.json"
 
 
 @dataclass(frozen=True)
@@ -52,6 +53,10 @@ class SBGEConfig:
     lambda_lr: float = 1e-4
     seed: int = 0
     device: str = "cpu"
+    split_file: Path | None = None
+    split_name: str = "train"
+    map_limit: int | None = None
+    experiment_name: str = "sbge"
 
     @property
     def actor_node_dim(self) -> int:
@@ -64,7 +69,7 @@ class SBGEConfig:
     def with_overrides(self, **kwargs) -> "SBGEConfig":
         normalized = {}
         for key, value in kwargs.items():
-            if key in {"maps_dir", "result_dir"} and value is not None:
+            if key in {"maps_dir", "result_dir", "split_file"} and value is not None:
                 normalized[key] = Path(value).expanduser().resolve()
             else:
                 normalized[key] = value
