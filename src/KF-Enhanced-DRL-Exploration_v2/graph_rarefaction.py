@@ -132,6 +132,12 @@ def distance_aware_pruning(
     """Phase 3: if the sparse graph still exceeds the budget, prune distant
     low-utility nodes while preserving connectivity.
 
+    Scoring function: score = utility / (1 + distance)
+    - Linear distance penalty balances utility and proximity
+    - Simple and interpretable
+    - Could be improved with exponential decay: u * exp(-d/sensor_range)
+      (left for future work / ablation experiments)
+
     Returns sorted array of indices to retain.
     """
     if len(keep) <= max_nodes:
@@ -145,7 +151,7 @@ def distance_aware_pruning(
             continue
         u = float(utility[idx])
         d = float(dist[idx]) if np.isfinite(dist[idx]) else 1e8
-        score = u / (1.0 + d)
+        score = u / (1.0 + d)  # Linear distance penalty
         scored.append((score, idx))
 
     scored.sort(key=lambda x: x[0], reverse=True)
@@ -225,6 +231,11 @@ def graph_rarefaction(
 ) -> tuple[np.ndarray, np.ndarray]:
     """Main entry point: reduce a dense exploration graph to a sparse one.
 
+    Three-phase algorithm:
+    1. Identify anchors (robot, frontiers, junctions)
+    2. Contract degree-2 chains between anchors
+    3. Distance-aware pruning if still over budget
+
     Parameters
     ----------
     coords : (N, 2) array of node world coordinates
@@ -233,8 +244,9 @@ def graph_rarefaction(
           matching ARiADNE / large-scale-DRL-exploration)
     current_index : index of the robot's current node
     max_nodes : maximum number of nodes to keep (NODE_PADDING_SIZE)
-    scoring_utility : optional (N,) array of smoothed utility values for
-          distance-aware pruning scoring. If None, uses *utility*.
+    scoring_utility : optional (N,) array for distance-aware pruning scoring.
+          If None, uses *utility* directly (default after removing KF prediction).
+          Legacy parameter kept for ablation experiments.
 
     Returns
     -------

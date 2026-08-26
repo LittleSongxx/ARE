@@ -206,9 +206,13 @@ class Node:
         self.utility_range = UTILITY_RANGE
         self.utility = 0
 
+        # Utility KF removed - use direct utility for simplicity and stronger theory.
+        # Rationale: utility evolution is jump-like (frontier discovered → utility>0,
+        # frontier explored → utility=0), violating KF's linear dynamics assumption.
         self.utility_kf = None
         self.predicted_utility = 0.0
         if ENABLE_KF_UTILITY_PREDICTION:
+            # Legacy support for ablation experiments only
             self.utility_kf = ScalarKalmanFilter(
                 initial_state=0.0,
                 initial_variance=KF_UTILITY_INITIAL_VARIANCE,
@@ -304,11 +308,16 @@ class Node:
         self._update_utility_kf()
 
     def _update_utility_kf(self):
-        """Update the Kalman filter with the current utility measurement
-        and produce a predicted utility for the next time step."""
+        """Update utility prediction.
+
+        When ENABLE_KF_UTILITY_PREDICTION=False (default): directly use observed utility.
+        When ENABLE_KF_UTILITY_PREDICTION=True: use KF prediction (for ablation only).
+        """
         if self.utility_kf is None:
+            # Direct utility (default, simpler and more robust)
             self.predicted_utility = float(self.utility)
             return
+        # KF prediction (legacy, kept for ablation experiments)
         self.utility_kf.update(float(self.utility))
         pred_state, _ = self.utility_kf.predict()
         self.predicted_utility = max(pred_state, 0.0)

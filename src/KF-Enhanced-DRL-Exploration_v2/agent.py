@@ -179,11 +179,12 @@ class Agent:
         )
 
         if ENABLE_GRAPH_RAREFACTION and dense_coords.shape[0] > NODE_PADDING_SIZE:
+            # Use predicted_utility for scoring (defaults to direct utility when KF disabled)
             scoring = dense_pred_utility if ENABLE_KF_UTILITY_PREDICTION else None
             selected, sparse_adj = graph_rarefaction(
                 dense_coords, dense_utility, dense_adj, dense_current,
                 max_nodes=NODE_PADDING_SIZE - 1,
-                scoring_utility=scoring,
+                scoring_utility=scoring,  # None → uses utility directly (default)
             )
             node_coords = dense_coords[selected]
             utility = dense_utility[selected]

@@ -17,18 +17,28 @@ ENABLE_GRAPH_RAREFACTION = True   # 节点数超 NODE_PADDING_SIZE 时自动稀�
 
 # -- KF 奖励标准差归一化 (inspired by KRPO, arXiv:2505.07527) --------
 # 用 KF 跟踪 reward 均值/方差，将 target_q 中的 reward 除以 running std。
-# 只归一化尺度，不减均值，兼容 GAMMA=1.0。
+# 关键设计: 只除 std，不减 mean (r' = r / max(std, 1))
+#
+# 理论依据 (GAMMA=1.0):
+#   标准归一化 r' = (r - μ)/σ 会导致 E[r'] ≈ 0
+#   在 γ=1 时: Q(s,a) = E[r] + E[Q(s',a')] ≈ 0 + E[Q(s',a')]
+#   → Q值完全由 entropy bonus 主导 (SAC)
+#
+# 我们的方法保留 reward 绝对量级，只稳定尺度:
+#   r' = r / max(std, 1)  # floor=1 防止小方差时奖励放大
+#   → E[r'] = E[r] / std，保留期望，只归一化方差
+#
 ENABLE_KF_REWARD_BASELINE = True
-KF_REWARD_PROCESS_NOISE = 0.01    # reward KF 过程噪声（越大适应越快）
-KF_REWARD_MEASUREMENT_NOISE = 1.0 # reward KF 观测噪声（越大跟踪越平滑）
+KF_REWARD_PROCESS_NOISE = 0.01    # reward 变化慢 → 小过程噪声
+KF_REWARD_MEASUREMENT_NOISE = 1.0 # batch 统计噪声适中
 
-# -- KF 节点 utility 预测 (KARNet, arXiv:2305.14644) ----------------
-# 策略观测始终用原始 utility（即时准确）。
-# KF 预测值仅用于图稀疏化的距离感知剪枝评分，防止误删暂时失去 utility 的节点。
-ENABLE_KF_UTILITY_PREDICTION = True
-KF_UTILITY_INITIAL_VARIANCE = 10.0   # utility KF 初始方差
-KF_UTILITY_PROCESS_NOISE = 0.3       # utility KF 过程噪声（越小预测越平滑）
-KF_UTILITY_MEASUREMENT_NOISE = 1.5   # utility KF 观测噪声（越大越信任 KF 预测）
+# -- KF 节点 utility 预测 (已移除，改用直接 utility) ----------------
+# 理由: utility 演化是跳变的（探索前>0, 探索后=0），不符合线性 KF 假设。
+# 简化设计：图稀疏化直接使用 observed utility 评分，更简单且理论更扎实。
+ENABLE_KF_UTILITY_PREDICTION = False  # 已禁用，保留开关用于消融实验对比
+KF_UTILITY_INITIAL_VARIANCE = 10.0    # (已弃用)
+KF_UTILITY_PROCESS_NOISE = 0.3        # (已弃用)
+KF_UTILITY_MEASUREMENT_NOISE = 1.5    # (已弃用)
 
 # -- KF 位置去噪 (Sim-to-Real, arXiv:2303.07243) -------------------
 ENABLE_POSITION_KF = False        # 用 KF 滤波机器人位置（部署时开启）
