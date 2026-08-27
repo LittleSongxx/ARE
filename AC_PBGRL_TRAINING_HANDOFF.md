@@ -1,6 +1,6 @@
 # AC-PBGRL 论文训练与监控 Handoff
 
-最后更新：2026-08-27 22:07（Asia/Shanghai）
+最后更新：2026-08-27 22:30（Asia/Shanghai）
 当前分支：`dev_kf`  
 核心实现基线：`53f80932`
 最新流水线计划测试：`c3c64d75`
@@ -90,17 +90,19 @@ pilot 的运行名与正式运行名相同，例如 `runs/full/seed_0`。如果 
 本节是 2026-08-27 19:38 左右的快照，PID 和数值会变化，接手后必须重新查询，不可依赖这里的 PID。
 
 - 共享 `ariadne_pi` teacher 已完成并固化到 100,000 environment transitions、6,125 optimizer updates、807 episodes；checkpoint 与 replay 的 `total_added` 都是 100,000。
-- 当前 stage：20,000 个 train future-gain 标签已完成，流水线已自动切换到生成 2,048 个 validation 标签。
+- 当前 stage：train/validation future-gain 标签均已完成并通过最终审计；`ariadne_pi/seed_0` 已启动向 200k transitions 训练。
 - train manifest 已完成 20,000 samples / 20 shards（19 × 1,024 + 544）；最终聚合审计确认全部 325,820 个有效候选标签、node/edge features 与 mask 均通过完整性检查，teacher/map-split provenance 哈希一致。
 - 最终 train 标签分布未退化：均值 `-0.832`、标准差 `0.761`、范围 `[-3.746, 2.913]`，按六位小数约有 208,225 个唯一值。
+- validation manifest 已完成 2,048 samples / 2 shards，共 33,414 个有效动作标签；全部 510 张 validation 地图均来自 validation split，与 train/OOD/IID-test 的地图重叠为 0，provenance 与 train 完全一致。
 - 修复后的首 shard（包含 Ray 初始化）耗时约 11 分钟，即约 1.53 samples/s；据此 train 20k 粗估约 3.6 小时，validation 粗估约 22 分钟，应以后续 shard 实测继续校正。
 - watchdog ID：`pilot`。
 - 调度硬限制：`ACPBGRL_GPU_ALLOWLIST=0,3`。
 - 标签阶段是 CPU-only，GPU 0/3 当前空闲；进入训练后仍只允许使用物理 GPU 0 和 3，两张卡在更新时各约占 27.5 GiB。
 - GPU 1 和 2 上存在其他用户的约 12 GiB 进程，本项目不得探测训练显存、租用或启动在这两张卡上。
-- watchdog、paper driver、label driver 和 32 个 Ray `LabelWorker` 均已确认存在。
-- 标签 Ray runtime 只发布 32 CPU、0 GPU；worker niceness 为 0，affinity 为 `0-95`，不会再全部拥挤在 `0,48`。
+- 标签阶段的 label driver 与 32 个 Ray `LabelWorker` 已正常退出；最终标签产物已完整固化。
+- 标签 Ray runtime 只发布了 32 CPU、0 GPU；worker niceness 为 0，affinity 为 `0-95`，未再出现全部拥挤在 `0,48` 的问题。
 - watchdog heartbeat 每 30 秒更新，且 cron 同时配置 `@reboot` 与每分钟兜底调用，因此本地 terminal、SSH 或 Codex 对话关闭不会终止训练。
+- 当前 `ariadne_pi/seed_0` launch 使用物理 GPU `[0, 3]`、DDP world size 2、micro-batch 64 和 48 个 Ray rollout worker；两个训练 rank 的 `CUDA_VISIBLE_DEVICES`、`LOCAL_RANK`、`RANK` 与 `WORLD_SIZE` 已逐进程核对。
 - 远端完整测试：45 passed。
 - 本地测试：28 passed、1 skipped；跳过原因是本地宿主 Python 没装 PyTorch，不是代码失败。
 - `c3c64d75` 增加了端到端 mocked paper-driver 计划测试，锁定单次模式的精确顺序，并明确断言不会启动 seed `1` 或消融 run。
