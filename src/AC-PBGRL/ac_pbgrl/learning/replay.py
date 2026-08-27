@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import threading
+import time
 from pathlib import Path
 from typing import Dict, Iterable, Mapping, Optional
 
@@ -188,6 +189,47 @@ class PersistentReplayBuffer:
         self.cursor = int(metadata["cursor"])
         self.size = int(metadata["size"])
         self.total_added = int(metadata.get("total_added", self.size))
+
+    def restore_checkpoint_manifest(self, manifest: Mapping) -> int:
+        """Roll committed metadata back to the last atomic learner checkpoint.
+
+        Replay array writes precede their metadata commit, while learner
+        checkpoints are written only after an optimizer wave.  A host failure
+        can therefore leave replay metadata ahead of the learner checkpoint.
+        The next deterministic rollout rewrites this suffix before sampling;
+        restoring cursor/size/total here prevents the orphaned suffix from
+        changing the formal transition or optimizer-update budget.
+        """
+
+        expected_capacity = int(manifest["capacity"])
+        expected_cursor = int(manifest["cursor"])
+        expected_size = int(manifest["size"])
+        expected_total = int(manifest.get("total_added", expected_size))
+        expected_schema = manifest.get("schema", self.schema)
+        if expected_capacity != self.capacity:
+            raise ValueError("checkpoint replay capacity differs from on-disk replay")
+        if expected_schema != self.schema:
+            raise ValueError("checkpoint replay schema differs from on-disk replay")
+        if expected_cursor != expected_total % self.capacity:
+            raise ValueError("checkpoint replay cursor is inconsistent with total_added")
+        if expected_size != min(expected_total, self.capacity):
+            raise ValueError("checkpoint replay size is inconsistent with total_added")
+        if self.total_added < expected_total:
+            raise RuntimeError("on-disk replay is older than the learner checkpoint")
+        orphaned = self.total_added - expected_total
+        if orphaned == 0:
+            return 0
+        if orphaned > self.capacity:
+            raise RuntimeError(
+                "uncheckpointed replay suffix exceeded ring capacity and cannot be deterministically restored"
+            )
+        recovery_path = self.root / f"metadata_orphaned_{time.time_ns()}.json"
+        atomic_write_json(recovery_path, self.manifest())
+        self.cursor = expected_cursor
+        self.size = expected_size
+        self.total_added = expected_total
+        self._commit_metadata()
+        return orphaned
 
     def sample(self, batch_size: int, device: str | torch.device = "cpu") -> TransitionBatch:
         if self.size == 0:

@@ -6,6 +6,7 @@ import math
 import os
 import signal
 import sys
+import tempfile
 import time
 from pathlib import Path
 
@@ -191,6 +192,39 @@ def append_metrics(path: Path, step: int, metrics: dict[str, float]) -> None:
         handle.write(json.dumps(record, sort_keys=True, allow_nan=False) + "\n")
 
 
+def reconcile_metrics_to_checkpoint(path: Path, *, episodes: int, update_step: int) -> int:
+    """Archive metric records produced after the checkpoint being resumed."""
+
+    if not path.is_file():
+        return 0
+    retained: list[str] = []
+    orphaned: list[str] = []
+    for line in path.read_text(encoding="utf-8").splitlines(keepends=True):
+        record = json.loads(line)
+        if "train/update_step" in record:
+            keep = int(record["train/update_step"]) <= int(update_step)
+        elif "episode/steps" in record:
+            keep = int(record["step"]) <= int(episodes)
+        else:
+            keep = True
+        (retained if keep else orphaned).append(line)
+    if not orphaned:
+        return 0
+    archive = path.with_name(f"{path.stem}.orphaned_{time.time_ns()}{path.suffix}")
+    archive.write_text("".join(orphaned), encoding="utf-8")
+    descriptor, temporary = tempfile.mkstemp(prefix=f".{path.name}.", dir=str(path.parent))
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+            handle.writelines(retained)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, path)
+    finally:
+        if os.path.exists(temporary):
+            os.unlink(temporary)
+    return len(orphaned)
+
+
 def parse_args(argv=None):
     parser = argparse.ArgumentParser(description="AC-PBGRL DDP trainer")
     parser.add_argument("--config", default="full")
@@ -241,8 +275,9 @@ def main(argv=None) -> int:
 
     learner = DiscreteSACLearner(config, context)
     resume_path = checkpoint_root / "latest.pt" if args.resume == "auto" else Path(args.resume)
+    checkpoint_payload = None
     if args.resume != "none" and resume_path.is_file():
-        load_checkpoint(resume_path, learner, map_location=context.device)
+        checkpoint_payload = load_checkpoint(resume_path, learner, map_location=context.device)
     context.barrier()
 
     train_maps = None
@@ -283,6 +318,39 @@ def main(argv=None) -> int:
             int(config.train.replay_size),
             int(config.project.seed) + 104729 * int(learner.state.update_step),
         )
+        if checkpoint_payload is not None:
+            replay_manifest = checkpoint_payload.get("replay")
+            if not replay_manifest:
+                raise ValueError("resume checkpoint does not contain a replay manifest")
+            checkpoint_total = int(replay_manifest.get("total_added", replay_manifest["size"]))
+            if checkpoint_total != int(learner.state.environment_steps):
+                raise ValueError(
+                    "checkpoint learner environment_steps differs from its replay manifest"
+                )
+            orphaned_transitions = replay.restore_checkpoint_manifest(replay_manifest)
+            orphaned_metrics = reconcile_metrics_to_checkpoint(
+                metrics_path,
+                episodes=int(learner.state.episodes),
+                update_step=int(learner.state.update_step),
+            )
+            if orphaned_transitions or orphaned_metrics:
+                recovery_path = run_root / "recovery_events.jsonl"
+                with recovery_path.open("a", encoding="utf-8") as handle:
+                    handle.write(
+                        json.dumps(
+                            {
+                                "time": time.time(),
+                                "checkpoint": str(resume_path),
+                                "orphaned_transitions": orphaned_transitions,
+                                "orphaned_metric_records": orphaned_metrics,
+                                "restored_environment_steps": checkpoint_total,
+                                "restored_update_step": int(learner.state.update_step),
+                                "restored_episodes": int(learner.state.episodes),
+                            },
+                            sort_keys=True,
+                        )
+                        + "\n"
+                    )
         rollout_backend = str(config.train.get("rollout_backend", "sequential"))
         if rollout_backend == "ray" and not args.smoke:
             rollout_pool = RayRolloutPool(config, context.world_size)

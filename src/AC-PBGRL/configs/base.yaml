@@ -127,6 +127,8 @@ gpu_scheduler:
   monitor_seconds: 30
   pressure_grace_checks: 2
   wait_seconds: 60
+  # A full optimizer wave is intentionally allowed to finish before restart.
+  shutdown_grace_seconds: 1800
   micro_batch_candidates: [64, 32, 16, 8, 4]
 
 evaluation:

@@ -1,4 +1,5 @@
 import subprocess
+import sys
 
 from ac_pbgrl.runtime.gpu import (
     GPULease,
@@ -9,6 +10,7 @@ from ac_pbgrl.runtime.gpu import (
     recommended_micro_batch,
     select_gpus,
 )
+from ac_pbgrl.runtime.supervisor import _direct_child_pids
 
 
 def inventory():
@@ -91,3 +93,27 @@ def test_gpu_uuid_lease_blocks_duplicate_project_job(tmp_path):
     first.release()
     assert second.acquire()
     second.release()
+
+
+def test_supervisor_can_target_training_children_without_signaling_launcher():
+    launcher = subprocess.Popen(
+        [
+            sys.executable,
+            "-c",
+            "import subprocess,sys,time; "
+            "p=subprocess.Popen([sys.executable,'-c','import time; time.sleep(30)']); "
+            "print(p.pid, flush=True); time.sleep(30)",
+        ],
+        stdout=subprocess.PIPE,
+        text=True,
+    )
+    try:
+        assert launcher.stdout is not None
+        worker_pid = int(launcher.stdout.readline())
+        assert worker_pid in _direct_child_pids(launcher.pid)
+        assert launcher.pid not in _direct_child_pids(launcher.pid)
+    finally:
+        for child_pid in _direct_child_pids(launcher.pid):
+            subprocess.run(["kill", "-TERM", str(child_pid)], check=False)
+        launcher.terminate()
+        launcher.wait(timeout=5)

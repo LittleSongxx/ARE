@@ -56,6 +56,27 @@ def _descendant_pids(root_pid: int) -> set[int]:
     return descendants
 
 
+def _direct_child_pids(root_pid: int) -> set[int]:
+    """Return direct children without signaling an unrelated process group."""
+
+    children: set[int] = set()
+    try:
+        entries = list(Path("/proc").iterdir())
+    except OSError:
+        return children
+    for entry in entries:
+        if not entry.name.isdigit():
+            continue
+        try:
+            stat = (entry / "stat").read_text(encoding="utf-8")
+            remainder = stat.rsplit(")", 1)[1].split()
+            if int(remainder[1]) == int(root_pid):
+                children.add(int(entry.name))
+        except (OSError, IndexError, ValueError):
+            continue
+    return children
+
+
 def _selection(config: Config, min_gpus: int, max_gpus: int, policy: str) -> list[GPUInfo]:
     scheduler = config.gpu_scheduler
     return select_gpus(
@@ -109,15 +130,27 @@ def supervise_training(
             handle.write(json.dumps(record, sort_keys=True) + "\n")
 
     def terminate_own_process(process: subprocess.Popen, reason: str) -> None:
-        event("terminate_training", reason=reason, pid=process.pid)
         if process.poll() is not None:
             return
-        os.killpg(process.pid, signal.SIGTERM)
+        # ``process`` is torchrun.  Signaling its whole process group also
+        # triggers torch elastic's launcher handler, which kills ranks before
+        # their update-boundary checkpoint can finish.  Notify only the direct
+        # training ranks; torchrun remains alive and waits for their clean exit.
+        targets = _direct_child_pids(process.pid)
+        if not targets:
+            targets = {process.pid}
+        event("terminate_training", reason=reason, pid=process.pid, signal_pids=sorted(targets))
+        for pid in targets:
+            try:
+                os.kill(pid, signal.SIGTERM)
+            except ProcessLookupError:
+                pass
         try:
-            process.wait(timeout=180)
+            process.wait(timeout=float(config.gpu_scheduler.get("shutdown_grace_seconds", 1800)))
         except subprocess.TimeoutExpired:
             # The process group was created by this supervisor; no external PID
             # is ever signaled.
+            event("graceful_shutdown_timeout", pid=process.pid)
             os.killpg(process.pid, signal.SIGKILL)
             process.wait()
 

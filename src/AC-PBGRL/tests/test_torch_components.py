@@ -16,6 +16,7 @@ from ac_pbgrl.learning.losses import heteroscedastic_gaussian_nll, ranknet_loss
 from ac_pbgrl.learning.replay import PersistentReplayBuffer
 from ac_pbgrl.learning.sac import DiscreteSACLearner
 from ac_pbgrl.learning.teacher import HeuristicTeacher
+from ac_pbgrl.learning.train import append_metrics, reconcile_metrics_to_checkpoint
 from ac_pbgrl.models.context import action_preserving_context
 from ac_pbgrl.models.policy import ACPolicyNetwork
 from ac_pbgrl.models.temporal import GRUPotentialMemory
@@ -160,6 +161,12 @@ def test_replay_survives_reopen_and_sac_updates(tmp_path: Path):
     )
     replay = PersistentReplayBuffer(tmp_path / "replay", 16)
     replay.add(transition)
+    checkpoint_manifest = replay.manifest()
+    replay.add(transition)
+    assert replay.total_added == 2
+    assert replay.restore_checkpoint_manifest(checkpoint_manifest) == 1
+    assert replay.total_added == checkpoint_manifest["total_added"]
+    assert replay.cursor == checkpoint_manifest["cursor"]
     reopened = PersistentReplayBuffer(tmp_path / "replay", 16)
     assert len(reopened) == 1
     context = DistributedContext(0, 0, 1, torch.device("cpu"), False)
@@ -169,6 +176,21 @@ def test_replay_survives_reopen_and_sac_updates(tmp_path: Path):
     metrics = learner.update_chunks(chunks, schedule)
     assert np.isfinite(metrics["loss/policy_sac"])
     assert np.isfinite(metrics["loss/region_potential"])
+
+
+def test_resume_archives_metrics_newer_than_checkpoint(tmp_path: Path):
+    path = tmp_path / "metrics" / "train.jsonl"
+    append_metrics(path, 1, {"episode/steps": 8, "train/environment_steps": 8})
+    append_metrics(path, 4, {"train/update_step": 4, "loss/q1": 1.0})
+    append_metrics(path, 2, {"episode/steps": 8, "train/environment_steps": 16})
+    append_metrics(path, 8, {"train/update_step": 8, "loss/q1": 2.0})
+
+    assert reconcile_metrics_to_checkpoint(path, episodes=1, update_step=4) == 2
+    retained = [__import__("json").loads(line) for line in path.read_text().splitlines()]
+    assert [record["step"] for record in retained] == [1, 4]
+    archives = list(path.parent.glob("train.orphaned_*.jsonl"))
+    assert len(archives) == 1
+    assert len(archives[0].read_text().splitlines()) == 2
 
 
 def test_sac_twin_critics_are_independently_initialized():
