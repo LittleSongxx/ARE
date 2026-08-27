@@ -128,7 +128,20 @@ nohup setsid ./scripts/server_watchdog.sh paper --gpus auto --gpu-policy prefer-
   </dev/null >/dev/null 2>&1 &
 ```
 
-watchdog 使用 `flock` 保证完整论文流水线只有一个实例，driver 非零退出后等待 30 秒再从原子 checkpoint/replay 续跑；成功完成后写入 `orchestration/paper_pipeline.complete` 并停止重启。PID、30 秒心跳和事件分别写入 `orchestration/paper_watchdog.pid`、`paper_watchdog.heartbeat` 和 `paper_watchdog.log`。
+watchdog 使用 `flock` 保证同名流水线只有一个实例，driver 非零退出后等待 30 秒再从原子 checkpoint/replay 续跑；成功完成后写入 `orchestration/paper_pipeline.complete` 并停止重启。PID、30 秒心跳和事件分别写入 `orchestration/paper_watchdog.pid`、`paper_watchdog.heartbeat` 和 `paper_watchdog.log`。可通过 `ACPBGRL_WATCHDOG_ID` 为不同流水线隔离锁、日志和完成标记。
+
+在投入正式的 `5 seeds × 1M transitions` 前，可先运行最小可信预验证。它只比较 ARiADNE+PI 与完整 AC-PBGRL，使用 3 个独立训练 seed；在 200k transitions 生成一次早期诊断，并无损续训到 500k。正式配置中辅助损失在约 480k transitions 才完成 warm-up 与线性增权，因此 200k 结果只用于发现训练失稳，500k 才作为 pilot 的效果判断点：
+
+```bash
+ACPBGRL_WATCHDOG_ID=pilot \
+ACPBGRL_DATA_ROOT=/mnt/songensheng/ac-pbgrl \
+ACPBGRL_PYTHON=/mnt/songensheng/ac-pbgrl/env/bin/python \
+nohup setsid ./scripts/server_watchdog.sh paper --pilot-only \
+  --pilot-seeds 3 --pilot-early-steps 200000 --pilot-steps 500000 \
+  --gpus auto --gpu-policy prefer-idle </dev/null >/dev/null 2>&1 &
+```
+
+pilot 复用正式运行名与 checkpoint；若结果通过，后续正式 1M 流程从 500k 继续，而不是重新训练。配对评测与图表分别写入 `pilot/step_200000` 和 `pilot/step_500000`。
 
 无 root 权限的服务器可把同一命令写入用户 crontab 的 `@reboot`，并额外每分钟调用一次作为 watchdog 自身的兜底；重复调用会因项目锁立即退出。安装前应使用绝对路径，并把 stdout/stderr 重定向到 `/mnt`，不要在 crontab 或 Git 中保存 SSH 密码。
 

@@ -2,7 +2,7 @@ from pathlib import Path
 
 import yaml
 
-from ac_pbgrl.cli import _suite_entries
+from ac_pbgrl.cli import _minimum_pilot_environment_steps, _suite_entries, build_parser
 from ac_pbgrl.config import CONFIG_ROOT, config_fingerprint, load_config, parse_overrides
 from ac_pbgrl.runtime.manifest import build_run_manifest, save_run_manifest
 
@@ -50,6 +50,17 @@ def test_suite_groups_can_run_main_before_ablations():
     }
     assert not ({method for method, _ in main} & {method for method, _ in ablations})
     assert _suite_entries(suite) == main + ablations
+
+
+def test_credibility_pilot_defaults_cover_full_auxiliary_schedule():
+    args = build_parser().parse_args(["paper", "--pilot-only"])
+    config = load_config("full")
+
+    assert args.pilot_seeds == 3
+    assert args.pilot_early_steps == 200000
+    assert args.pilot_steps == 500000
+    assert _minimum_pilot_environment_steps(config) == 480000
+    assert args.pilot_early_steps < _minimum_pilot_environment_steps(config) <= args.pilot_steps
 
 
 def test_invalid_override_is_rejected():

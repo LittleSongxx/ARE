@@ -10,9 +10,14 @@ PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 DATA_ROOT="${ACPBGRL_DATA_ROOT:-${PROJECT_DIR}/.runtime}"
 PYTHON_BIN="${ACPBGRL_PYTHON:-}"
 RESTART_DELAY="${ACPBGRL_WATCHDOG_RESTART_DELAY:-30}"
+WATCHDOG_ID="${ACPBGRL_WATCHDOG_ID:-paper}"
 
 if [[ ! "${RESTART_DELAY}" =~ ^[0-9]+$ ]]; then
     echo "ACPBGRL_WATCHDOG_RESTART_DELAY must be a non-negative integer" >&2
+    exit 2
+fi
+if [[ ! "${WATCHDOG_ID}" =~ ^[A-Za-z0-9._-]+$ ]]; then
+    echo "ACPBGRL_WATCHDOG_ID may contain only letters, digits, dot, underscore, and hyphen" >&2
     exit 2
 fi
 if [[ -z "${PYTHON_BIN}" || ! -x "${PYTHON_BIN}" ]]; then
@@ -27,13 +32,13 @@ else
 fi
 
 STATE_DIR="${DATA_ROOT}/orchestration"
-LOCK_PATH="${STATE_DIR}/paper_watchdog.lock"
-WATCHDOG_PID_PATH="${STATE_DIR}/paper_watchdog.pid"
-CHILD_PID_PATH="${STATE_DIR}/paper_driver.pid"
-HEARTBEAT_PATH="${STATE_DIR}/paper_watchdog.heartbeat"
-COMPLETE_PATH="${STATE_DIR}/paper_pipeline.complete"
-DRIVER_LOG="${STATE_DIR}/paper_driver.log"
-WATCHDOG_LOG="${STATE_DIR}/paper_watchdog.log"
+LOCK_PATH="${STATE_DIR}/${WATCHDOG_ID}_watchdog.lock"
+WATCHDOG_PID_PATH="${STATE_DIR}/${WATCHDOG_ID}_watchdog.pid"
+CHILD_PID_PATH="${STATE_DIR}/${WATCHDOG_ID}_driver.pid"
+HEARTBEAT_PATH="${STATE_DIR}/${WATCHDOG_ID}_watchdog.heartbeat"
+COMPLETE_PATH="${STATE_DIR}/${WATCHDOG_ID}_pipeline.complete"
+DRIVER_LOG="${STATE_DIR}/${WATCHDOG_ID}_driver.log"
+WATCHDOG_LOG="${STATE_DIR}/${WATCHDOG_ID}_watchdog.log"
 mkdir -p "${STATE_DIR}"
 
 exec 9>"${LOCK_PATH}"
@@ -100,7 +105,7 @@ cleanup() {
 trap cleanup EXIT
 
 atomic_line "${WATCHDOG_PID_PATH}" "$$"
-log_event "event=watchdog_started pid=$$ args=${PIPELINE_ARGS[*]}"
+log_event "event=watchdog_started id=${WATCHDOG_ID} pid=$$ args=${PIPELINE_ARGS[*]}"
 
 while (( ! stop_requested )); do
     log_event "event=driver_start"

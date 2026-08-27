@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import importlib.metadata
 import json
+import math
 import os
 import shutil
 import subprocess
@@ -123,6 +124,12 @@ def build_parser() -> argparse.ArgumentParser:
     paper.add_argument("--gpus", default="auto")
     paper.add_argument("--gpu-policy", default="prefer-idle")
     paper.add_argument("--label-samples", type=int, default=100000)
+    paper.add_argument("--pilot-only", action="store_true")
+    paper.add_argument("--pilot-seeds", type=int, default=3)
+    paper.add_argument("--pilot-early-steps", type=int, default=200000)
+    paper.add_argument("--pilot-steps", type=int, default=500000)
+    paper.add_argument("--pilot-label-samples", type=int, default=20000)
+    paper.add_argument("--pilot-map-limit", type=int, default=100)
 
     test = subparsers.add_parser("test", help="run the repository test suite")
     test.add_argument("pytest_args", nargs=argparse.REMAINDER)
@@ -604,6 +611,16 @@ def _suite_entries(suite: dict, groups=("main", "ablations")) -> list[tuple[str,
     return entries
 
 
+def _minimum_pilot_environment_steps(config) -> int:
+    """Return the first transition count with fully weighted auxiliaries."""
+
+    update_ratio = float(config.train.gradient_updates_per_transition)
+    if update_ratio <= 0:
+        raise ValueError("gradient_updates_per_transition must be positive")
+    scheduled_updates = int(config.loss.warmup_steps) + int(config.loss.ramp_steps)
+    return int(math.ceil(scheduled_updates / update_ratio))
+
+
 def command_ablate(args) -> int:
     suite_path = CONFIG_ROOT / "suites" / f"{args.suite}.yaml"
     suite = yaml.safe_load(suite_path.read_text(encoding="utf-8"))
@@ -634,12 +651,128 @@ def command_ablate(args) -> int:
 
 
 def command_paper(args) -> int:
+    from ac_pbgrl.utils import atomic_write_json
+
     config = load_config("full", system="server_a40")
     data_root = Path(config.project.data_root)
     run_script = str(PROJECT_ROOT / "run.sh")
+    suite = yaml.safe_load((CONFIG_ROOT / "suites" / "main.yaml").read_text(encoding="utf-8"))
+    main_seeds = [int(value) for value in suite["main"]["seeds"]]
+    ablation_seeds = [int(value) for value in suite["ablations"]["seeds"]]
+    if bool(args.pilot_only):
+        pilot_seed_count = int(args.pilot_seeds)
+        pilot_early_steps = int(args.pilot_early_steps)
+        pilot_steps = int(args.pilot_steps)
+        required_steps = _minimum_pilot_environment_steps(config)
+        if pilot_seed_count < 3:
+            raise ValueError("a credibility pilot requires at least three independent seeds")
+        if pilot_seed_count > len(main_seeds):
+            raise ValueError("pilot seed count exceeds the registered main-suite seeds")
+        if pilot_early_steps <= 0 or pilot_early_steps >= pilot_steps:
+            raise ValueError("pilot_early_steps must be positive and smaller than pilot_steps")
+        if pilot_steps < required_steps:
+            raise ValueError(
+                f"pilot_steps={pilot_steps} ends before auxiliary ramp completion at "
+                f"{required_steps} environment transitions"
+            )
 
     def invoke(arguments, *, environment=None) -> int:
         return subprocess.call([run_script, *arguments], cwd=str(PROJECT_ROOT), env=environment)
+
+    def train_until(method: str, seed: int, environment_steps: int) -> int:
+        return invoke(
+            [
+                "supervise",
+                "--config",
+                method,
+                "--system",
+                "server_a40",
+                "--gpus",
+                args.gpus,
+                "--gpu-policy",
+                args.gpu_policy,
+                "--set",
+                f"project.seed={seed}",
+                "--set",
+                f"project.run_name={method}/seed_{seed}",
+                "--set",
+                f"train.max_environment_steps={int(environment_steps)}",
+            ]
+        )
+
+    def calibrate_seed(method: str, seed: int) -> int:
+        checkpoint = data_root / "runs" / method / f"seed_{seed}" / "checkpoints" / "latest.pt"
+        return invoke(
+            [
+                "calibrate",
+                "--config",
+                method,
+                "--system",
+                "server_a40",
+                "--checkpoint",
+                str(checkpoint),
+                "--set",
+                f"project.seed={seed}",
+                "--samples",
+                "2048",
+            ]
+        )
+
+    def evaluate_entries(entries, output_root: Path, map_limit: int | None = None) -> int:
+        evaluation_environment = os.environ.copy()
+        evaluation_device = "cpu"
+        lease = None
+        if args.gpus != "cpu":
+            scheduler = config.gpu_scheduler
+            selected = select_gpus(
+                query_gpus(),
+                policy=args.gpu_policy,
+                min_gpus=1,
+                max_gpus=1,
+                min_free_memory_gib=float(scheduler.min_free_memory_gib),
+                max_utilization_pct=int(scheduler.max_utilization_pct),
+                max_temperature_c=int(scheduler.max_temperature_c),
+                idle_used_memory_mib=int(scheduler.idle_used_memory_mib),
+                idle_utilization_pct=int(scheduler.idle_utilization_pct),
+            )
+            if not selected:
+                return 75
+            lease = GPULease(data_root / "gpu_locks", selected)
+            if not lease.acquire():
+                return 75
+            evaluation_environment["CUDA_VISIBLE_DEVICES"] = str(selected[0].index)
+            evaluation_environment["CUBLAS_WORKSPACE_CONFIG"] = ":4096:8"
+            evaluation_device = "cuda:0"
+        try:
+            for method, seed in entries:
+                run_root = data_root / "runs" / method / f"seed_{seed}"
+                evaluation_root = output_root / method / f"seed_{seed}" / "evaluation"
+                command = [
+                    "evaluate",
+                    "--config",
+                    method,
+                    "--system",
+                    "server_a40",
+                    "--checkpoint",
+                    str(run_root / "checkpoints" / "latest.pt"),
+                    "--output",
+                    str(evaluation_root),
+                    "--device",
+                    evaluation_device,
+                    "--seeds",
+                    str(seed),
+                    "--set",
+                    f"project.seed={seed}",
+                ]
+                if map_limit is not None:
+                    command.extend(("--map-limit", str(int(map_limit))))
+                result = invoke(command, environment=evaluation_environment)
+                if result:
+                    return result
+        finally:
+            if lease is not None:
+                lease.release()
+        return 0
 
     teacher_path = data_root / "teachers" / "ariadne_pi" / f"step_{int(config.teacher.checkpoint_step)}.pt"
     if not teacher_path.is_file():
@@ -666,10 +799,17 @@ def command_paper(args) -> int:
         source = data_root / "runs" / teacher_run / "checkpoints" / "latest.pt"
         teacher_path.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(source, teacher_path)
-    if invoke(["splits", "--config", "full", "--system", "server_a40"]):
-        return 1
-    validation_samples = max(2048, int(args.label_samples) // 10)
-    for split, samples in (("train", int(args.label_samples)), ("validation", validation_samples)):
+    split_manifest = data_root / "map_splits.json"
+    if not split_manifest.is_file():
+        if invoke(["splits", "--config", "full", "--system", "server_a40"]):
+            return 1
+    label_samples = (
+        min(int(args.label_samples), int(args.pilot_label_samples))
+        if bool(args.pilot_only)
+        else int(args.label_samples)
+    )
+    validation_samples = max(2048, label_samples // 10)
+    for split, samples in (("train", label_samples), ("validation", validation_samples)):
         result = invoke(
             [
                 "labels",
@@ -686,9 +826,6 @@ def command_paper(args) -> int:
         if result:
             return result
 
-    suite = yaml.safe_load((CONFIG_ROOT / "suites" / "main.yaml").read_text(encoding="utf-8"))
-    main_seeds = [int(value) for value in suite["main"]["seeds"]]
-    ablation_seeds = [int(value) for value in suite["ablations"]["seeds"]]
     phase_steps = int(config.train.calibration_phase_steps)
 
     def temporal_prephase(method: str, seed: int, kind: str) -> int:
@@ -758,6 +895,70 @@ def command_paper(args) -> int:
             ]
         )
 
+    if bool(args.pilot_only):
+        pilot_seeds = main_seeds[:pilot_seed_count]
+        pilot_entries = [
+            (method, seed)
+            for method in ("ariadne_pi", "full")
+            for seed in pilot_seeds
+        ]
+        for stage_steps in (pilot_early_steps, pilot_steps):
+            for seed in pilot_seeds:
+                result = train_until("ariadne_pi", seed, stage_steps)
+                if result:
+                    return result
+            for seed in pilot_seeds:
+                result = temporal_prephase("full", seed, "kf")
+                if result:
+                    return result
+                result = train_until("full", seed, stage_steps)
+                if result:
+                    return result
+            if stage_steps == pilot_steps:
+                for seed in pilot_seeds:
+                    result = calibrate_seed("full", seed)
+                    if result:
+                        return result
+
+            stage_root = data_root / "pilot" / f"step_{stage_steps}"
+            evaluation_runs = stage_root / "runs"
+            result = evaluate_entries(
+                pilot_entries,
+                evaluation_runs,
+                map_limit=int(args.pilot_map_limit),
+            )
+            if result:
+                return result
+            figure_root = stage_root / "figures"
+            result = invoke(
+                [
+                    "figures",
+                    "--runs-root",
+                    str(evaluation_runs),
+                    "--output",
+                    str(figure_root),
+                ]
+            )
+            if result:
+                return result
+            atomic_write_json(
+                stage_root / "manifest.json",
+                {
+                    "kind": "early_diagnostic" if stage_steps == pilot_early_steps else "credibility_pilot",
+                    "methods": ["ariadne_pi", "full"],
+                    "seeds": pilot_seeds,
+                    "environment_steps_per_run": stage_steps,
+                    "minimum_steps_for_full_auxiliary_weight": required_steps,
+                    "auxiliary_weight_fully_ramped": stage_steps >= required_steps,
+                    "train_label_samples": label_samples,
+                    "validation_label_samples": validation_samples,
+                    "evaluation_map_limit": int(args.pilot_map_limit),
+                    "evaluation_runs_root": str(evaluation_runs),
+                    "figure_root": str(figure_root),
+                },
+            )
+        return 0
+
     # Complete every main-comparison model before spending compute on controls
     # that are only needed by the ablation suite.  The 30k full-method phase is
     # resumed by its 1M run, so it remains part of the same transition budget.
@@ -802,79 +1003,14 @@ def command_paper(args) -> int:
     # on one fixed physical GPU so planning latency remains comparable.
     for method, seeds in (("full", main_seeds), ("potential_kf", ablation_seeds)):
         for seed in seeds:
-            checkpoint = data_root / "runs" / method / f"seed_{seed}" / "checkpoints" / "latest.pt"
-            result = invoke(
-                [
-                    "calibrate",
-                    "--config",
-                    method,
-                    "--system",
-                    "server_a40",
-                    "--checkpoint",
-                    str(checkpoint),
-                    "--set",
-                    f"project.seed={seed}",
-                    "--samples",
-                    "2048",
-                ]
-            )
+            result = calibrate_seed(method, seed)
             if result:
                 return result
 
     entries = _suite_entries(suite)
-    evaluation_environment = os.environ.copy()
-    evaluation_device = "cpu"
-    lease = None
-    if args.gpus != "cpu":
-        scheduler = config.gpu_scheduler
-        selected = select_gpus(
-            query_gpus(),
-            policy=args.gpu_policy,
-            min_gpus=1,
-            max_gpus=1,
-            min_free_memory_gib=float(scheduler.min_free_memory_gib),
-            max_utilization_pct=int(scheduler.max_utilization_pct),
-            max_temperature_c=int(scheduler.max_temperature_c),
-            idle_used_memory_mib=int(scheduler.idle_used_memory_mib),
-            idle_utilization_pct=int(scheduler.idle_utilization_pct),
-        )
-        if not selected:
-            return 75
-        lease = GPULease(data_root / "gpu_locks", selected)
-        if not lease.acquire():
-            return 75
-        evaluation_environment["CUDA_VISIBLE_DEVICES"] = str(selected[0].index)
-        evaluation_environment["CUBLAS_WORKSPACE_CONFIG"] = ":4096:8"
-        evaluation_device = "cuda:0"
-    try:
-        for method, seed in entries:
-            run_root = data_root / "runs" / method / f"seed_{seed}"
-            checkpoint = run_root / "checkpoints" / "latest.pt"
-            result = invoke(
-                [
-                    "evaluate",
-                    "--config",
-                    method,
-                    "--system",
-                    "server_a40",
-                    "--checkpoint",
-                    str(checkpoint),
-                    "--output",
-                    str(run_root / "evaluation"),
-                    "--device",
-                    evaluation_device,
-                    "--seeds",
-                    str(seed),
-                    "--set",
-                    f"project.seed={seed}",
-                ],
-                environment=evaluation_environment,
-            )
-            if result:
-                return result
-    finally:
-        if lease is not None:
-            lease.release()
+    result = evaluate_entries(entries, data_root / "runs")
+    if result:
+        return result
     return invoke(
         [
             "figures",
