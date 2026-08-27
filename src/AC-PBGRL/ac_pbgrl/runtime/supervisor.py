@@ -255,7 +255,7 @@ def supervise_training(
                 if stop_event.is_set():
                     event("supervisor_stopped")
                     return 130
-                if return_code == 0 and not pressure_triggered:
+                if return_code == 0 and not pressure_triggered and not restart_requested:
                     return 0
                 if oom:
                     candidates = [int(value) for value in config.gpu_scheduler.micro_batch_candidates]

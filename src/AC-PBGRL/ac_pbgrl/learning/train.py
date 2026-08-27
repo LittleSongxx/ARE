@@ -568,6 +568,7 @@ def main(argv=None) -> int:
         completed = episode_cursor >= int(config.train.episodes) or (
             max_environment_steps > 0 and learner.state.environment_steps >= max_environment_steps
         )
+        gracefully_stopped = _run_stop_requested(run_root)
         if context.is_primary:
             save_checkpoint(
                 checkpoint_root / ("final.pt" if completed else "interrupted.pt"),
@@ -582,7 +583,11 @@ def main(argv=None) -> int:
                     encoding="utf-8",
                 )
         context.barrier()
-        return 0 if completed else TEMPORARY_RESOURCE_EXIT
+        # A coordinated request is a successful checkpointed shutdown.  The
+        # supervisor uses restart.request to distinguish it from completion;
+        # returning zero keeps torch elastic from classifying healthy ranks as
+        # failures and killing a peer during teardown.
+        return 0 if completed or gracefully_stopped else TEMPORARY_RESOURCE_EXIT
     except RuntimeError as exc:
         if "out of memory" in str(exc).lower():
             if context.is_primary:
