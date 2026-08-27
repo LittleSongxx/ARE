@@ -1,9 +1,20 @@
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from typing import Sequence
 
 from ac_pbgrl.config import Config, PROJECT_ROOT
+
+
+def _restore_cpu_affinity() -> None:
+    """Undo narrow OpenMP affinity inherited by Ray worker processes."""
+
+    if hasattr(os, "sched_setaffinity"):
+        try:
+            os.sched_setaffinity(0, range(int(os.cpu_count() or 1)))
+        except OSError:
+            pass
 
 
 class RayLabelPool:
@@ -16,6 +27,7 @@ class RayLabelPool:
             raise RuntimeError("parallel label generation requires ray==2.10.0") from exc
 
         self.ray = ray
+        count = max(1, int(config.teacher.get("label_actors", 32)))
         self.started_runtime = not ray.is_initialized()
         if self.started_runtime:
             root = Path(config.project.data_root) / "ray-labels"
@@ -23,11 +35,13 @@ class RayLabelPool:
             ray.init(
                 address=None,
                 _temp_dir=str(root),
+                num_cpus=count,
+                num_gpus=0,
+                _system_config={"worker_niceness": 0},
                 include_dashboard=False,
                 log_to_driver=False,
                 ignore_reinit_error=True,
             )
-        count = max(1, int(config.teacher.get("label_actors", 32)))
         project_path = str(PROJECT_ROOT)
 
         @ray.remote(num_cpus=1, max_restarts=1)
@@ -37,6 +51,9 @@ class RayLabelPool:
 
                 if project_path not in sys.path:
                     sys.path.insert(0, project_path)
+                from ac_pbgrl.learning.ray_labels import _restore_cpu_affinity
+
+                _restore_cpu_affinity()
                 from ac_pbgrl.config import Config
                 from ac_pbgrl.learning.future_gain import FutureGainLabeler
                 from ac_pbgrl.learning.teacher import FrozenPolicyTeacher
