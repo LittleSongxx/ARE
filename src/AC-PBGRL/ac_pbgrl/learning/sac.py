@@ -51,21 +51,31 @@ class DiscreteSACLearner:
             logvar_max=float(model.logvar_max),
         ).to(context.device)
         critic_dim = int(environment.critic_feature_dim if method.privileged_critic else environment.node_feature_dim)
-        self.q1_raw = PrivilegedQNetwork(
-            critic_dim,
-            int(environment.edge_feature_dim),
-            int(model.embedding_dim),
-            int(model.heads),
-            int(model.encoder_layers),
-            float(model.dropout),
-            use_diffusion=False,
-        ).to(context.device)
-        self.q2_raw = copy.deepcopy(self.q1_raw).to(context.device)
-        self.target_q1 = copy.deepcopy(self.q1_raw).to(context.device).eval()
-        self.target_q2 = copy.deepcopy(self.q2_raw).to(context.device).eval()
+        def build_critic() -> PrivilegedQNetwork:
+            return PrivilegedQNetwork(
+                critic_dim,
+                int(environment.edge_feature_dim),
+                int(model.embedding_dim),
+                int(model.heads),
+                int(model.encoder_layers),
+                float(model.dropout),
+                use_diffusion=False,
+            ).to(context.device)
+
+        # Clipped double-Q only reduces positive bias when the two estimators
+        # are genuinely independent.  Deep-copying q1 here makes q1/q2 remain
+        # bit-identical when dropout is disabled because both critics see the
+        # same replay minibatches and optimizer sequence.
+        self.q1_raw = build_critic()
+        self.q2_raw = build_critic()
         self.actor = wrap_ddp(self.actor_raw, context)
         self.q1 = wrap_ddp(self.q1_raw, context)
         self.q2 = wrap_ddp(self.q2_raw, context)
+        # DDP construction broadcasts rank-zero online parameters.  Clone the
+        # targets afterwards; cloning before wrapping would leave every rank's
+        # non-DDP target networks at its rank-specific random initialization.
+        self.target_q1 = copy.deepcopy(self.q1_raw).to(context.device).eval()
+        self.target_q2 = copy.deepcopy(self.q2_raw).to(context.device).eval()
         learning_rate = float(config.train.learning_rate)
         self.actor_optimizer = torch.optim.Adam(self.actor_raw.parameters(), lr=learning_rate)
         self.q1_optimizer = torch.optim.Adam(self.q1_raw.parameters(), lr=learning_rate)
@@ -379,11 +389,19 @@ class DiscreteSACLearner:
         }
 
     def load_state_dict(self, payload: dict) -> None:
+        q1_payload = payload["q1"]
+        q2_payload = payload["q2"]
+        shared_keys = q1_payload.keys() == q2_payload.keys()
+        if shared_keys and all(torch.equal(q1_payload[name], q2_payload[name]) for name in q1_payload):
+            raise ValueError(
+                "checkpoint contains bit-identical q1/q2 critics; clipped double-Q requires "
+                "independent initialization, so this checkpoint must not be used for a formal run"
+            )
         self.actor_raw.load_state_dict(payload["actor"])
-        self.q1_raw.load_state_dict(payload["q1"])
-        self.q2_raw.load_state_dict(payload["q2"])
-        self.target_q1.load_state_dict(payload.get("target_q1", payload["q1"]))
-        self.target_q2.load_state_dict(payload.get("target_q2", payload["q2"]))
+        self.q1_raw.load_state_dict(q1_payload)
+        self.q2_raw.load_state_dict(q2_payload)
+        self.target_q1.load_state_dict(payload.get("target_q1", q1_payload))
+        self.target_q2.load_state_dict(payload.get("target_q2", q2_payload))
         self.actor_optimizer.load_state_dict(payload["actor_optimizer"])
         self.q1_optimizer.load_state_dict(payload["q1_optimizer"])
         self.q2_optimizer.load_state_dict(payload["q2_optimizer"])

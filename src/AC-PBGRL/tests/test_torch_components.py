@@ -1,3 +1,4 @@
+import copy
 from pathlib import Path
 
 import numpy as np
@@ -168,6 +169,28 @@ def test_replay_survives_reopen_and_sac_updates(tmp_path: Path):
     metrics = learner.update_chunks(chunks, schedule)
     assert np.isfinite(metrics["loss/policy_sac"])
     assert np.isfinite(metrics["loss/region_potential"])
+
+
+def test_sac_twin_critics_are_independently_initialized():
+    config = smoke_config()
+    context = DistributedContext(0, 0, 1, torch.device("cpu"), False)
+    learner = DiscreteSACLearner(config, context)
+
+    parameter_pairs = zip(learner.q1_raw.parameters(), learner.q2_raw.parameters())
+    assert any(not torch.equal(q1, q2) for q1, q2 in parameter_pairs)
+    assert all(
+        torch.equal(online, target)
+        for online, target in zip(learner.q1_raw.parameters(), learner.target_q1.parameters())
+    )
+    assert all(
+        torch.equal(online, target)
+        for online, target in zip(learner.q2_raw.parameters(), learner.target_q2.parameters())
+    )
+
+    invalid_checkpoint = learner.state_dict()
+    invalid_checkpoint["q2"] = copy.deepcopy(invalid_checkpoint["q1"])
+    with pytest.raises(ValueError, match="bit-identical q1/q2"):
+        learner.load_state_dict(invalid_checkpoint)
 
 
 def test_real_map_actor_critic_action_coordinates_align():
