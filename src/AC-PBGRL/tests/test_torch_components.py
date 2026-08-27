@@ -16,7 +16,11 @@ from ac_pbgrl.learning.losses import heteroscedastic_gaussian_nll, ranknet_loss
 from ac_pbgrl.learning.replay import PersistentReplayBuffer
 from ac_pbgrl.learning.sac import DiscreteSACLearner
 from ac_pbgrl.learning.teacher import HeuristicTeacher
-from ac_pbgrl.learning.train import append_metrics, reconcile_metrics_to_checkpoint
+from ac_pbgrl.learning.train import (
+    _run_stop_requested,
+    append_metrics,
+    reconcile_metrics_to_checkpoint,
+)
 from ac_pbgrl.models.context import action_preserving_context
 from ac_pbgrl.models.policy import ACPolicyNetwork
 from ac_pbgrl.models.temporal import GRUPotentialMemory
@@ -191,6 +195,12 @@ def test_resume_archives_metrics_newer_than_checkpoint(tmp_path: Path):
     archives = list(path.parent.glob("train.orphaned_*.jsonl"))
     assert len(archives) == 1
     assert len(archives[0].read_text().splitlines()) == 2
+
+
+def test_file_based_graceful_stop_avoids_signaling_ray(tmp_path: Path):
+    assert not _run_stop_requested(tmp_path)
+    (tmp_path / "graceful_stop.request").write_text("{}", encoding="utf-8")
+    assert _run_stop_requested(tmp_path)
 
 
 def test_sac_twin_critics_are_independently_initialized():

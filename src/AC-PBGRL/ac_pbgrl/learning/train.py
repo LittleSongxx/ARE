@@ -42,6 +42,10 @@ def _signal_handler(signum, frame):
     _stop_requested = True
 
 
+def _run_stop_requested(run_root: Path) -> bool:
+    return bool(_stop_requested or (run_root / "graceful_stop.request").is_file())
+
+
 def apply_smoke_overrides(config: Config) -> Config:
     config = config.clone()
     config.environment.backend = "synthetic"
@@ -442,7 +446,7 @@ def main(argv=None) -> int:
     completed = False
     try:
         while episode_cursor < int(config.train.episodes):
-            if context.is_primary and _stop_requested:
+            if context.is_primary and _run_stop_requested(run_root):
                 collection_count = 0
             elif context.is_primary:
                 remaining_episodes = int(config.train.episodes) - episode_cursor
@@ -535,10 +539,11 @@ def main(argv=None) -> int:
             if context.is_primary:
                 append_metrics(metrics_path, learner.state.update_step, aggregate)
                 now = time.monotonic()
+                run_stop_requested = _run_stop_requested(run_root)
                 due = (
                     now - last_checkpoint >= float(config.train.checkpoint_seconds)
                     or episode_cursor - last_checkpoint_episode >= int(config.train.checkpoint_episodes)
-                    or _stop_requested
+                    or run_stop_requested
                 )
                 if due:
                     save_checkpoint(
@@ -550,7 +555,9 @@ def main(argv=None) -> int:
                     )
                     last_checkpoint = now
                     last_checkpoint_episode = episode_cursor
-            stop = context.broadcast_object(_stop_requested if context.is_primary else None)
+            else:
+                run_stop_requested = None
+            stop = context.broadcast_object(run_stop_requested)
             max_environment_steps = int(config.train.get("max_environment_steps", 0))
             reached_budget = max_environment_steps > 0 and learner.state.environment_steps >= max_environment_steps
             reached_budget = context.broadcast_object(reached_budget if context.is_primary else None)

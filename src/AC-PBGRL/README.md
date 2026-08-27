@@ -115,7 +115,7 @@ KF/GRU 方法需要先得到无时序预训练 checkpoint：
 
 CPU rollout 默认按 48 个物理核留出系统余量后扩展为 1/2/3/4 卡对应 32/48/56/64 个 Ray actor。worker 启动时会恢复完整 CPU affinity 并使用单线程算子，避免 OpenMP 启动线程把全部 Ray 子进程错误限制在一个物理核上。GPU 数、actor 数或 micro-batch 的变化都不改变统一的 environment-transition、optimizer-update 和 global-batch 预算。
 
-supervisor 每 30 秒记录资源与外部 GPU 进程。显存余量连续不足、收到信号或 CUDA OOM 时，只终止自己创建的进程组，在更新边界使用原子 checkpoint 退出；随后重新选卡并续训。项目锁只协调 AC-PBGRL 自己的任务，不会结束或抢占其他用户进程。`run_manifest.json` 保留所有 4→2→1 卡资源会话，`supervisor/**/events.jsonl` 保存等待、压力、OOM 和重启事件。
+supervisor 每 30 秒记录资源与外部 GPU 进程。显存余量连续不足或收到信号时，它通过运行目录中的 request file 通知 DDP ranks，在共同更新边界原子保存 checkpoint 后退出；这避免 Ray 原生 SIGTERM handler 和 torch elastic 提前杀死训练进程。CUDA OOM 仍由训练器写入专用恢复标记并降低 micro-batch。随后 supervisor 重新选卡续训。项目锁只协调 AC-PBGRL 自己的任务，不会结束或抢占其他用户进程。`run_manifest.json` 保留所有 4→2→1 卡资源会话，`supervisor/**/events.jsonl` 保存等待、压力、OOM 和重启事件。
 
 ### 无人值守与服务器重启恢复
 

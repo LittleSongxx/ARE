@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Sequence
 
 from ac_pbgrl.config import Config
+from ac_pbgrl.utils import atomic_write_json
 from .gpu import (
     GPULease,
     GPUInfo,
@@ -54,27 +55,6 @@ def _descendant_pids(root_pid: int) -> set[int]:
                 descendants.add(pid)
                 changed = True
     return descendants
-
-
-def _direct_child_pids(root_pid: int) -> set[int]:
-    """Return direct children without signaling an unrelated process group."""
-
-    children: set[int] = set()
-    try:
-        entries = list(Path("/proc").iterdir())
-    except OSError:
-        return children
-    for entry in entries:
-        if not entry.name.isdigit():
-            continue
-        try:
-            stat = (entry / "stat").read_text(encoding="utf-8")
-            remainder = stat.rsplit(")", 1)[1].split()
-            if int(remainder[1]) == int(root_pid):
-                children.add(int(entry.name))
-        except (OSError, IndexError, ValueError):
-            continue
-    return children
 
 
 def _selection(config: Config, min_gpus: int, max_gpus: int, policy: str) -> list[GPUInfo]:
@@ -132,19 +112,15 @@ def supervise_training(
     def terminate_own_process(process: subprocess.Popen, reason: str) -> None:
         if process.poll() is not None:
             return
-        # ``process`` is torchrun.  Signaling its whole process group also
-        # triggers torch elastic's launcher handler, which kills ranks before
-        # their update-boundary checkpoint can finish.  Notify only the direct
-        # training ranks; torchrun remains alive and waits for their clean exit.
-        targets = _direct_child_pids(process.pid)
-        if not targets:
-            targets = {process.pid}
-        event("terminate_training", reason=reason, pid=process.pid, signal_pids=sorted(targets))
-        for pid in targets:
-            try:
-                os.kill(pid, signal.SIGTERM)
-            except ProcessLookupError:
-                pass
+        # Ray installs a native SIGTERM handler in rank zero and torch elastic
+        # treats a signaled rank as a failure.  A request file lets both ranks
+        # reach the same DDP/update boundary without delivering Unix signals.
+        request_path = run_root / "graceful_stop.request"
+        atomic_write_json(
+            request_path,
+            {"time": time.time(), "reason": reason, "torchrun_pid": process.pid},
+        )
+        event("terminate_training", reason=reason, pid=process.pid, mechanism="request_file")
         try:
             process.wait(timeout=float(config.gpu_scheduler.get("shutdown_grace_seconds", 1800)))
         except subprocess.TimeoutExpired:
@@ -275,6 +251,7 @@ def supervise_training(
                 event("exit", return_code=return_code)
                 oom = archive_marker(run_root / "oom.request", "oom")
                 restart_requested = archive_marker(run_root / "restart.request", "restart")
+                archive_marker(run_root / "graceful_stop.request", "graceful_stop")
                 if stop_event.is_set():
                     event("supervisor_stopped")
                     return 130
