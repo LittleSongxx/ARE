@@ -595,14 +595,19 @@ def command_export(args) -> int:
     return 0
 
 
-def command_ablate(args) -> int:
-    suite_path = CONFIG_ROOT / "suites" / f"{args.suite}.yaml"
-    suite = yaml.safe_load(suite_path.read_text(encoding="utf-8"))
+def _suite_entries(suite: dict, groups=("main", "ablations")) -> list[tuple[str, int]]:
     entries = []
-    for group in ("main", "ablations"):
+    for group in groups:
         for config_name in suite[group]["configs"]:
             for seed in suite[group]["seeds"]:
                 entries.append((config_name, int(seed)))
+    return entries
+
+
+def command_ablate(args) -> int:
+    suite_path = CONFIG_ROOT / "suites" / f"{args.suite}.yaml"
+    suite = yaml.safe_load(suite_path.read_text(encoding="utf-8"))
+    entries = _suite_entries(suite, getattr(args, "groups", ("main", "ablations")))
     for config_name, seed in entries:
         command = [
             str(PROJECT_ROOT / "run.sh"),
@@ -753,16 +758,13 @@ def command_paper(args) -> int:
             ]
         )
 
-    for method, seeds, kind in (
-        ("full", main_seeds, "kf"),
-        ("potential_kf", ablation_seeds, "kf"),
-        ("gru_control", ablation_seeds, "gru"),
-    ):
-        for seed in seeds:
-            result = temporal_prephase(method, seed, kind)
-            if result:
-                return result
-
+    # Complete every main-comparison model before spending compute on controls
+    # that are only needed by the ablation suite.  The 30k full-method phase is
+    # resumed by its 1M run, so it remains part of the same transition budget.
+    for seed in main_seeds:
+        result = temporal_prephase("full", seed, "kf")
+        if result:
+            return result
     result = command_ablate(
         argparse.Namespace(
             suite="main",
@@ -770,6 +772,27 @@ def command_paper(args) -> int:
             gpu_policy=args.gpu_policy,
             system="server_a40",
             smoke=False,
+            groups=("main",),
+        )
+    )
+    if result:
+        return result
+
+    # Ablation-only temporal controls are deliberately deferred until all four
+    # main methods and their seeds have reached the formal budget.
+    for method, kind in (("potential_kf", "kf"), ("gru_control", "gru")):
+        for seed in ablation_seeds:
+            result = temporal_prephase(method, seed, kind)
+            if result:
+                return result
+    result = command_ablate(
+        argparse.Namespace(
+            suite="main",
+            gpus=args.gpus,
+            gpu_policy=args.gpu_policy,
+            system="server_a40",
+            smoke=False,
+            groups=("ablations",),
         )
     )
     if result:
@@ -798,11 +821,7 @@ def command_paper(args) -> int:
             if result:
                 return result
 
-    entries = []
-    for group in ("main", "ablations"):
-        for method in suite[group]["configs"]:
-            for seed in suite[group]["seeds"]:
-                entries.append((method, int(seed)))
+    entries = _suite_entries(suite)
     evaluation_environment = os.environ.copy()
     evaluation_device = "cpu"
     lease = None

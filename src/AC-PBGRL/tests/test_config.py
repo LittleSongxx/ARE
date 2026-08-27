@@ -1,5 +1,8 @@
 from pathlib import Path
 
+import yaml
+
+from ac_pbgrl.cli import _suite_entries
 from ac_pbgrl.config import CONFIG_ROOT, config_fingerprint, load_config, parse_overrides
 from ac_pbgrl.runtime.manifest import build_run_manifest, save_run_manifest
 
@@ -30,6 +33,23 @@ def test_all_declared_experiments_load():
     }
     fingerprints = {config_fingerprint(load_config(name)) for name in names}
     assert len(fingerprints) == len(names)
+
+
+def test_suite_groups_can_run_main_before_ablations():
+    suite = yaml.safe_load((CONFIG_ROOT / "suites" / "main.yaml").read_text(encoding="utf-8"))
+    main = _suite_entries(suite, ("main",))
+    ablations = _suite_entries(suite, ("ablations",))
+
+    assert len(main) == 20
+    assert len(ablations) == 21
+    assert {method for method, _ in main} == {
+        "ariadne",
+        "ariadne_pi",
+        "q_distillation",
+        "full",
+    }
+    assert not ({method for method, _ in main} & {method for method, _ in ablations})
+    assert _suite_entries(suite) == main + ablations
 
 
 def test_invalid_override_is_rejected():
