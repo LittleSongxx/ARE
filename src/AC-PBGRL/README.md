@@ -124,7 +124,8 @@ supervisor 每 30 秒记录资源与外部 GPU 进程。显存余量连续不足
 ```bash
 ACPBGRL_DATA_ROOT=/mnt/songensheng/ac-pbgrl \
 ACPBGRL_PYTHON=/mnt/songensheng/ac-pbgrl/env/bin/python \
-setsid -f ./scripts/server_watchdog.sh paper --gpus auto --gpu-policy prefer-idle
+nohup setsid ./scripts/server_watchdog.sh paper --gpus auto --gpu-policy prefer-idle \
+  </dev/null >/dev/null 2>&1 &
 ```
 
 watchdog 使用 `flock` 保证完整论文流水线只有一个实例，driver 非零退出后等待 30 秒再从原子 checkpoint/replay 续跑；成功完成后写入 `orchestration/paper_pipeline.complete` 并停止重启。PID、30 秒心跳和事件分别写入 `orchestration/paper_watchdog.pid`、`paper_watchdog.heartbeat` 和 `paper_watchdog.log`。
