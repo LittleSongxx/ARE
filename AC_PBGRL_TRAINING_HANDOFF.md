@@ -1,6 +1,6 @@
 # AC-PBGRL 论文训练与监控 Handoff
 
-最后更新：2026-08-27 23:13（Asia/Shanghai）
+最后更新：2026-08-27 23:52（Asia/Shanghai）
 当前分支：`dev_kf`  
 核心实现基线：`53f80932`
 最新流水线计划测试：`c3c64d75`
@@ -87,10 +87,10 @@ pilot 的运行名与正式运行名相同，例如 `runs/full/seed_0`。如果 
 
 ## 4. 当前服务器状态快照
 
-本节是 2026-08-27 23:13 左右的快照，PID 和数值会变化，接手后必须重新查询，不可依赖这里的 PID。
+本节是 2026-08-27 23:52 左右的快照，PID 和数值会变化，接手后必须重新查询，不可依赖这里的 PID。
 
 - 共享 `ariadne_pi` teacher 已完成并固化到 100,000 environment transitions、6,125 optimizer updates、807 episodes；checkpoint 与 replay 的 `total_added` 都是 100,000。
-- 当前 stage：train/validation future-gain 标签均已完成并通过最终审计；`ariadne_pi/seed_0` 正在向 200k transitions 训练。23:10:56 的第四个完整 checkpoint 为 26,342 environment transitions、208 episodes、1,521 optimizer updates；随后第五轮 rollout 已把磁盘 replay 推进到 32,240，正在执行对应 update wave。
+- 当前 stage：train/validation future-gain 标签均已完成并通过最终审计；`ariadne_pi/seed_0` 正在向 200k transitions 训练。23:50:54 的第八个完整 checkpoint 为 50,533 environment transitions、400 episodes、3,033 optimizer updates；随后第九轮 rollout 已把磁盘 replay 推进到 56,607，正在执行对应 update wave。
 - train manifest 已完成 20,000 samples / 20 shards（19 × 1,024 + 544）；最终聚合审计确认全部 325,820 个有效候选标签、node/edge features 与 mask 均通过完整性检查，teacher/map-split provenance 哈希一致。
 - 最终 train 标签分布未退化：均值 `-0.832`、标准差 `0.761`、范围 `[-3.746, 2.913]`，按六位小数约有 208,225 个唯一值。
 - validation manifest 已完成 2,048 samples / 2 shards，共 33,414 个有效动作标签；全部 510 张 validation 地图均来自 validation split，与 train/OOD/IID-test 的地图重叠为 0，provenance 与 train 完全一致。
@@ -104,8 +104,9 @@ pilot 的运行名与正式运行名相同，例如 `runs/full/seed_0`。如果 
 - watchdog heartbeat 每 30 秒更新，且 cron 同时配置 `@reboot` 与每分钟兜底调用，因此本地 terminal、SSH 或 Codex 对话关闭不会终止训练。
 - 当前 `ariadne_pi/seed_0` launch 使用物理 GPU `[0, 3]`、DDP world size 2、micro-batch 64 和 48 个 Ray rollout worker；两个训练 rank 的 `CUDA_VISIBLE_DEVICES`、`LOCAL_RANK`、`RANK` 与 `WORLD_SIZE` 已逐进程核对。
 - 前两个完整训练周期均已验证：8,115 transitions 对应 382 updates，14,259 transitions 对应 766 updates，精确满足扣除 2,000 条 minimum replay 后每 transition `0.0625` 次更新的累计预算；两个 checkpoint 都能重新加载，第二个 checkpoint 的 replay 状态与当时磁盘状态完全一致。
-- 截至第五轮 rollout，train metrics 中所有数值字段均为有限值，没有 NaN/Inf、CUDA OOM、NCCL 故障或 watchdog 重启。前五个在线 rollout 波次的成功数依次为 `1/64、0/48、2/48、3/48、5/48`，与已稳定完成 100k 的 teacher 参考轨迹基本一致；这些训练地图上的噪声样本只能用于健康检查，不可提前当作固定地图效果评测。
-- 当前 run 前三个 aggregate 的 14 个非时间指标与独立 teacher 文件在相同步数上逐位一致；第四个 aggregate 仅出现约 0.07% 的 target 差异和约 3%～4% 的 Q loss/gradient 波动，符合 Ray rollout 完成顺序带来的正常轻微分叉。Q target 与原始 Q gradient 的早期上升也与成功完成的 teacher 轨迹一致，不是当前新出现的发散。
+- 25% checkpoint 可重新加载，checkpoint 与 replay 的 `total_added=50,533` 完全一致，SHA256 为 `46c2240e42abf0f06b5085e4acc44d33664a0a43776a2de7a5a69fab15657108`；截至该 checkpoint 的 408 条 train metrics 所有数值字段均为有限值，没有 NaN/Inf、CUDA OOM、NCCL 故障或 watchdog 重启。
+- 25% 最新 aggregate 为 Q loss `37.48/37.65`、Q gradient `218.40`、target `70.32`、entropy `2.604`、alpha `0.753`，仍处于已稳定完成 100k 的 teacher 轨迹包络内。全部 400 个在线训练 episode 成功率 4.0%；最近 192 个 episode 成功率 5.2%、平均覆盖率 0.581、平均回报 -48.99，未出现策略坍缩；这些训练地图噪声样本不可提前当作固定地图效果评测。
+- 远端发布目录不带 `.git` 元数据，但 `cli.py`、`learning/train.py`、`learning/sac.py`、`runtime/supervisor.py` 与 `server_watchdog.sh` 五个关键文件的 SHA256 已和本地逐项核对完全一致，后续 full 阶段不会加载漂移源码。
 - update wave 时 GPU 0/3 各占约 27.5 GiB，利用率通常 90%～100%，温度约 74/78°C、功耗约 250W，未出现硬件或软件 thermal throttle；rollout/checkpoint 边界的单卡瞬时低利用率不代表训练停止。
 - supervisor 运行中每 30 秒检查资源压力；任一已选 GPU 连续 2 次严格高于配置上限 80°C 时，会写请求文件并等待当前 update 边界优雅 checkpoint/重启，而不是直接杀训练。单次读数等于 80°C 不触发；硬件 slowdown 阈值为 95°C。若发生重复温度重启，应先核对风道、外部 GPU 进程和 event 记录，再决定是否降低 micro-batch 或功耗，不能手工 kill rank。
 - 远端完整测试：45 passed。
