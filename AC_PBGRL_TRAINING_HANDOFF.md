@@ -1,8 +1,8 @@
 # AC-PBGRL 论文训练与监控 Handoff
 
-最后更新：2026-08-27（Asia/Shanghai）  
+最后更新：2026-08-27 18:40（Asia/Shanghai）
 当前分支：`dev_kf`  
-核心实现基线：`053a38b2`（handoff 文档自身的提交位于其后）  
+核心实现基线：`5df4f15d`
 当前工作范围：只关注真实论文算法、二维训练、配对评测与实验可靠性；PPT 工作已经结束。
 
 ## 1. 本轮任务是什么
@@ -83,19 +83,21 @@ pilot 的运行名与正式运行名相同，例如 `runs/full/seed_0`。如果 
 
 ## 4. 当前服务器状态快照
 
-本节是 2026-08-27 17:34 左右的快照，PID 和数值会变化，接手后必须重新查询，不可依赖这里的 PID。
+本节是 2026-08-27 18:40 左右的快照，PID 和数值会变化，接手后必须重新查询，不可依赖这里的 PID。
 
-- 当前 stage：共享 `ariadne_pi` teacher，目标 100k。
-- 最近一次确认过的完整 checkpoint：74,164 environment transitions、4,510 optimizer updates、592 episodes。
-- 恢复后在线 rollout 已推进到约 79,808 transitions，随后进入 GPU update wave。
+- 共享 `ariadne_pi` teacher 已完成并固化到 100,000 environment transitions、6,125 optimizer updates、807 episodes；checkpoint 与 replay 的 `total_added` 都是 100,000。
+- 当前 stage：使用固定 teacher 生成 20,000 个 train future-gain 标签；完成后会自动生成 2,048 个 validation 标签。
+- 18:38 已写出首个 train shard 和原子 manifest：1,024 samples，16,624 个有效候选标签均为有限值，teacher/map-split provenance 哈希一致。
+- 修复后的首 shard（包含 Ray 初始化）耗时约 11 分钟，即约 1.53 samples/s；据此 train 20k 粗估约 3.6 小时，validation 粗估约 22 分钟，应以后续 shard 实测继续校正。
 - watchdog ID：`pilot`。
 - 调度硬限制：`ACPBGRL_GPU_ALLOWLIST=0,3`。
-- 当前仅使用物理 GPU 0 和 3；两张卡在更新时各约占 27.5 GiB。
+- 标签阶段是 CPU-only，GPU 0/3 当前空闲；进入训练后仍只允许使用物理 GPU 0 和 3，两张卡在更新时各约占 27.5 GiB。
 - GPU 1 和 2 上存在其他用户的约 12 GiB 进程，本项目不得探测训练显存、租用或启动在这两张卡上。
-- watchdog、paper driver、supervisor、torchrun、两个 DDP rank 和 Ray rollout workers 均已确认存在。
+- watchdog、paper driver、label driver 和 32 个 Ray `LabelWorker` 均已确认存在。
+- 标签 Ray runtime 只发布 32 CPU、0 GPU；worker niceness 为 0，affinity 为 `0-95`，不会再全部拥挤在 `0,48`。
 - watchdog heartbeat 每 30 秒更新，且 cron 同时配置 `@reboot` 与每分钟兜底调用，因此本地 terminal、SSH 或 Codex 对话关闭不会终止训练。
-- 远端完整测试：41 passed。
-- 本地测试：24 passed、1 skipped；跳过原因是本地宿主 Python 没装 PyTorch，不是代码失败。
+- 远端完整测试：43 passed。
+- 本地测试：26 passed、1 skipped；跳过原因是本地宿主 Python 没装 PyTorch，不是代码失败。
 
 远端连接地址、用户名、密码和私有绝对路径按项目约束不写入 Git。新会话应从用户提供的连接信息或本机 SSH config 获取；若信息不可见，应重新向用户索取。禁止把认证信息加入命令脚本、README、handoff、Git history 或日志。
 
@@ -253,6 +255,7 @@ c164ddcd  initialize zero-transition stop branch
 0b5bee53  add minimum credible pilot pipeline
 ac916582  restrict scheduler to approved GPU indices
 053a38b2  keep watchdog attached during graceful stop
+5df4f15d  restore CPU scheduling for label workers
 ```
 
 ### DDP graceful-stop rank race
@@ -294,6 +297,12 @@ expandable_segments not supported on this platform
 ```
 
 这是当前 CUDA allocator/platform 的兼容警告；micro-batch 真实探测仍通过，且 A40 update wave 稳定占用约 27.5 GiB。目前不需要因此中止训练。
+
+### 标签 worker 继承窄 CPU affinity
+
+旧 `RayLabelPool` 没有训练 rollout pool 已有的 CPU affinity 恢复逻辑，导致 32 个标签 worker 都继承 `0,48`，同时保留 Ray 默认 niceness 15。机器虽然有 96 个逻辑 CPU，标签生成实际只获得约 1～2 核吞吐，首个 shard 长时间不能落盘。
+
+`5df4f15d` 已修复：标签 Ray runtime 只声明 `label_actors` 个 CPU 和 0 GPU、禁用 worker niceness，并在每个 actor 初始化时把 affinity 恢复到可见 CPU 集。部署时按安全暂停流程停止旧 watchdog，远端 CPU-only 全套测试 43 passed 后恢复原 cron；新 worker 已实测 niceness 0、affinity `0-95`，单 worker CPU 从约 5% 提升到约 70%～85%。首个 1,024-sample shard 及 manifest 已正常写出。
 
 ## 9. 资源使用约束
 
@@ -352,8 +361,8 @@ pytest -q src/AC-PBGRL/tests --disable-warnings --maxfail=1
 
 按优先级：
 
-1. 持续确认当前 teacher 从约 79.8k 完成到 100k，生成固定 teacher checkpoint。
-2. 观察 label generation 的 CPU/Ray 吞吐、shard manifest 和断点续写，确认 train 达 20k、validation 达 2,048。
+1. 持续观察 label generation 的 CPU/Ray 吞吐和 shard manifest，确认 train 从当前 1,024 达到 20k、validation 达到 2,048；若中断，应从最后完整 manifest 续写，不能删除已完成 shard。
+2. 标签完成后确认流水线自动进入 `ariadne_pi/seed_0`，并重新检查 GPU allowlist、memory probe 和首个 checkpoint。
 3. 监控三个 ARiADNE+PI seed 到 200k，再监控三个 full seed 的 prephase/calibration 和 200k 训练。
 4. 200k 配对评测完成后，检查六份 episode CSV、potential samples、paired effects、代表路径和 manifest；只做工程/方向诊断。
 5. 流水线继续到 500k，不修改正式 warm-up/ramp 或数据 split。
