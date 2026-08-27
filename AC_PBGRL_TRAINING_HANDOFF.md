@@ -107,6 +107,7 @@ pilot 的运行名与正式运行名相同，例如 `runs/full/seed_0`。如果 
 - 截至第五轮 rollout，train metrics 中所有数值字段均为有限值，没有 NaN/Inf、CUDA OOM、NCCL 故障或 watchdog 重启。前五个在线 rollout 波次的成功数依次为 `1/64、0/48、2/48、3/48、5/48`，与已稳定完成 100k 的 teacher 参考轨迹基本一致；这些训练地图上的噪声样本只能用于健康检查，不可提前当作固定地图效果评测。
 - 当前 run 前三个 aggregate 的 14 个非时间指标与独立 teacher 文件在相同步数上逐位一致；第四个 aggregate 仅出现约 0.07% 的 target 差异和约 3%～4% 的 Q loss/gradient 波动，符合 Ray rollout 完成顺序带来的正常轻微分叉。Q target 与原始 Q gradient 的早期上升也与成功完成的 teacher 轨迹一致，不是当前新出现的发散。
 - update wave 时 GPU 0/3 各占约 27.5 GiB，利用率通常 90%～100%，温度约 74/78°C、功耗约 250W，未出现硬件或软件 thermal throttle；rollout/checkpoint 边界的单卡瞬时低利用率不代表训练停止。
+- supervisor 运行中每 30 秒检查资源压力；任一已选 GPU 连续 2 次严格高于配置上限 80°C 时，会写请求文件并等待当前 update 边界优雅 checkpoint/重启，而不是直接杀训练。单次读数等于 80°C 不触发；硬件 slowdown 阈值为 95°C。若发生重复温度重启，应先核对风道、外部 GPU 进程和 event 记录，再决定是否降低 micro-batch 或功耗，不能手工 kill rank。
 - 远端完整测试：45 passed。
 - 本地测试：28 passed、1 skipped；跳过原因是本地宿主 Python 没装 PyTorch，不是代码失败。
 - `c3c64d75` 增加了端到端 mocked paper-driver 计划测试，锁定单次模式的精确顺序，并明确断言不会启动 seed `1` 或消融 run。
