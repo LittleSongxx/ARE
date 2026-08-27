@@ -130,10 +130,13 @@ nohup setsid ./scripts/server_watchdog.sh paper --gpus auto --gpu-policy prefer-
 
 watchdog 使用 `flock` 保证同名流水线只有一个实例，driver 非零退出后等待 30 秒再从原子 checkpoint/replay 续跑；成功完成后写入 `orchestration/paper_pipeline.complete` 并停止重启。PID、30 秒心跳和事件分别写入 `orchestration/paper_watchdog.pid`、`paper_watchdog.heartbeat` 和 `paper_watchdog.log`。可通过 `ACPBGRL_WATCHDOG_ID` 为不同流水线隔离锁、日志和完成标记。
 
+共享服务器上若只获准使用部分物理卡，可设置如 `ACPBGRL_GPU_ALLOWLIST=0,3`。`auto` 调度仍能在这两张卡之间按资源动态缩放，但不会探测、租用或训练在名单外的 GPU。
+
 在投入正式的 `5 seeds × 1M transitions` 前，可先运行最小可信预验证。它只比较 ARiADNE+PI 与完整 AC-PBGRL，使用 3 个独立训练 seed；在 200k transitions 生成一次早期诊断，并无损续训到 500k。正式配置中辅助损失在约 480k transitions 才完成 warm-up 与线性增权，因此 200k 结果只用于发现训练失稳，500k 才作为 pilot 的效果判断点：
 
 ```bash
 ACPBGRL_WATCHDOG_ID=pilot \
+ACPBGRL_GPU_ALLOWLIST=0,3 \
 ACPBGRL_DATA_ROOT=/mnt/songensheng/ac-pbgrl \
 ACPBGRL_PYTHON=/mnt/songensheng/ac-pbgrl/env/bin/python \
 nohup setsid ./scripts/server_watchdog.sh paper --pilot-only \

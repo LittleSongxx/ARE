@@ -4,6 +4,7 @@ from ac_pbgrl.runtime.gpu import (
     GPULease,
     GPUInfo,
     calibrate_micro_batch,
+    filter_gpu_allowlist,
     parse_gpu_csv,
     parse_gpu_process_csv,
     recommended_micro_batch,
@@ -24,6 +25,11 @@ def test_prefer_idle_matches_shared_server_snapshot():
     selected = select_gpus(inventory(), policy="prefer-idle", min_gpus=1, max_gpus=4)
     assert [gpu.index for gpu in selected] == [0, 3]
     assert recommended_micro_batch(selected, reserve_gib=6) == 64
+
+
+def test_gpu_allowlist_keeps_dynamic_scheduling_inside_reserved_cards():
+    assert [gpu.index for gpu in filter_gpu_allowlist(inventory(), "0,3")] == [0, 3]
+    assert filter_gpu_allowlist(inventory(), "") == inventory()
 
 
 def test_shared_fallback_and_idle_only():

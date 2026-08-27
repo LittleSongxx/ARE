@@ -96,6 +96,25 @@ def query_gpu_processes(
     return parse_gpu_process_csv(result.stdout)
 
 
+def filter_gpu_allowlist(
+    gpus: Sequence[GPUInfo],
+    value: str | None = None,
+) -> list[GPUInfo]:
+    """Restrict automatic scheduling to explicit physical GPU indices."""
+
+    raw = os.environ.get("ACPBGRL_GPU_ALLOWLIST", "") if value is None else value
+    raw = str(raw).strip()
+    if not raw:
+        return list(gpus)
+    try:
+        allowed = {int(item.strip()) for item in raw.split(",") if item.strip()}
+    except ValueError as exc:
+        raise ValueError("ACPBGRL_GPU_ALLOWLIST must be comma-separated GPU indices") from exc
+    if not allowed:
+        raise ValueError("ACPBGRL_GPU_ALLOWLIST must contain at least one GPU index")
+    return [gpu for gpu in gpus if gpu.index in allowed]
+
+
 def query_gpus(run: Callable[..., subprocess.CompletedProcess] = subprocess.run) -> list[GPUInfo]:
     try:
         process = run(
@@ -112,7 +131,7 @@ def query_gpus(run: Callable[..., subprocess.CompletedProcess] = subprocess.run)
     except (FileNotFoundError, subprocess.CalledProcessError):
         return []
     counts = {uuid: len(pids) for uuid, pids in app_processes.items()}
-    return parse_gpu_csv(process.stdout, counts)
+    return filter_gpu_allowlist(parse_gpu_csv(process.stdout, counts))
 
 
 def select_gpus(
