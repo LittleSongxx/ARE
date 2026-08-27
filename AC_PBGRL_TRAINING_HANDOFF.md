@@ -1,6 +1,6 @@
 # AC-PBGRL 论文训练与监控 Handoff
 
-最后更新：2026-08-27 19:50（Asia/Shanghai）
+最后更新：2026-08-27 20:22（Asia/Shanghai）
 当前分支：`dev_kf`  
 核心实现基线：`53f80932`
 最新流水线计划测试：`c3c64d75`
@@ -91,7 +91,8 @@ pilot 的运行名与正式运行名相同，例如 `runs/full/seed_0`。如果 
 
 - 共享 `ariadne_pi` teacher 已完成并固化到 100,000 environment transitions、6,125 optimizer updates、807 episodes；checkpoint 与 replay 的 `total_added` 都是 100,000。
 - 当前 stage：使用固定 teacher 生成 20,000 个 train future-gain 标签；完成后会自动生成 2,048 个 validation 标签。
-- train manifest 已达到 7,168 samples / 7 shards；已抽检的前两个 shard 与最新 `shard_00006.h5` 中所有有效候选标签均为有限值，teacher/map-split provenance 哈希一致。
+- train manifest 已达到 10,240 samples / 10 shards；半程聚合审计确认 manifest、分片样本数和路径一一对应，全部 166,584 个有效候选标签、node/edge features 与 mask 均通过完整性检查，teacher/map-split provenance 哈希一致。
+- 半程标签分布未退化：均值 `-0.833`、标准差 `0.757`、范围 `[-3.264, 2.610]`，按六位小数约有 125,491 个唯一值。
 - 修复后的首 shard（包含 Ray 初始化）耗时约 11 分钟，即约 1.53 samples/s；据此 train 20k 粗估约 3.6 小时，validation 粗估约 22 分钟，应以后续 shard 实测继续校正。
 - watchdog ID：`pilot`。
 - 调度硬限制：`ACPBGRL_GPU_ALLOWLIST=0,3`。
