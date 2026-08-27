@@ -117,6 +117,20 @@ CPU rollout 默认按 48 个物理核留出系统余量后扩展为 1/2/3/4 卡�
 
 supervisor 每 30 秒记录资源与外部 GPU 进程。显存余量连续不足、收到信号或 CUDA OOM 时，只终止自己创建的进程组，在更新边界使用原子 checkpoint 退出；随后重新选卡并续训。项目锁只协调 AC-PBGRL 自己的任务，不会结束或抢占其他用户进程。`run_manifest.json` 保留所有 4→2→1 卡资源会话，`supervisor/**/events.jsonl` 保存等待、压力、OOM 和重启事件。
 
+### 无人值守与服务器重启恢复
+
+`nohup` 足以让任务不受本地终端、SSH 断线或 Codex 会话结束影响；正式长实验建议再用外层 watchdog 覆盖 paper driver 崩溃与服务器重启：
+
+```bash
+ACPBGRL_DATA_ROOT=/mnt/songensheng/ac-pbgrl \
+ACPBGRL_PYTHON=/mnt/songensheng/ac-pbgrl/env/bin/python \
+setsid -f ./scripts/server_watchdog.sh paper --gpus auto --gpu-policy prefer-idle
+```
+
+watchdog 使用 `flock` 保证完整论文流水线只有一个实例，driver 非零退出后等待 30 秒再从原子 checkpoint/replay 续跑；成功完成后写入 `orchestration/paper_pipeline.complete` 并停止重启。PID、30 秒心跳和事件分别写入 `orchestration/paper_watchdog.pid`、`paper_watchdog.heartbeat` 和 `paper_watchdog.log`。
+
+无 root 权限的服务器可把同一命令写入用户 crontab 的 `@reboot`，并额外每分钟调用一次作为 watchdog 自身的兜底；重复调用会因项目锁立即退出。安装前应使用绝对路径，并把 stdout/stderr 重定向到 `/mnt`，不要在 crontab 或 Git 中保存 SSH 密码。
+
 ## 数据与产物
 
 重型产物优先使用 `$ACPBGRL_DATA_ROOT`；未设置时，若 `/mnt/songensheng` 可写则使用 `/mnt/songensheng/ac-pbgrl`，否则使用项目内 `.runtime`。主要目录为：
