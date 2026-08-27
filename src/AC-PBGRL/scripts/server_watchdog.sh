@@ -128,10 +128,23 @@ while (( ! stop_requested )); do
     ) 9>&- &
     heartbeat_pid=$!
 
-    set +e
-    wait "${child_pid}"
-    return_code=$?
-    set -e
+    # A trapped signal interrupts Bash's wait even while the child is still
+    # alive.  Keep ownership of the driver until its checkpoint-aware child
+    # has actually exited; otherwise both processes become orphans and a cron
+    # restart can overlap the old training run.
+    return_code=0
+    while true; do
+        set +e
+        wait "${child_pid}"
+        return_code=$?
+        set -e
+        if ! kill -0 "${child_pid}" 2>/dev/null; then
+            break
+        fi
+        if (( stop_requested )); then
+            stop_child_tree
+        fi
+    done
     kill "${heartbeat_pid}" 2>/dev/null || true
     wait "${heartbeat_pid}" 2>/dev/null || true
     heartbeat_pid=""
