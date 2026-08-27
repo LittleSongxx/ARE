@@ -17,6 +17,7 @@ from ac_pbgrl.learning.replay import PersistentReplayBuffer
 from ac_pbgrl.learning.sac import DiscreteSACLearner
 from ac_pbgrl.learning.teacher import HeuristicTeacher
 from ac_pbgrl.learning.train import (
+    _coordinated_run_stop_requested,
     _run_stop_requested,
     append_metrics,
     reconcile_metrics_to_checkpoint,
@@ -201,6 +202,28 @@ def test_file_based_graceful_stop_avoids_signaling_ray(tmp_path: Path):
     assert not _run_stop_requested(tmp_path)
     (tmp_path / "graceful_stop.request").write_text("{}", encoding="utf-8")
     assert _run_stop_requested(tmp_path)
+
+
+def test_graceful_stop_decision_is_broadcast_from_primary(tmp_path: Path):
+    class Context:
+        def __init__(self, is_primary, broadcast_value=None):
+            self.is_primary = is_primary
+            self.broadcast_value = broadcast_value
+            self.observed = None
+
+        def broadcast_object(self, value):
+            self.observed = value
+            return value if self.is_primary else self.broadcast_value
+
+    (tmp_path / "graceful_stop.request").write_text("{}", encoding="utf-8")
+    primary = Context(True)
+    secondary = Context(False, broadcast_value=True)
+
+    assert _coordinated_run_stop_requested(primary, tmp_path)
+    (tmp_path / "graceful_stop.request").unlink()
+    assert _coordinated_run_stop_requested(secondary, tmp_path)
+    assert primary.observed is True
+    assert secondary.observed is None
 
 
 def test_sac_twin_critics_are_independently_initialized():

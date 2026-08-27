@@ -46,6 +46,13 @@ def _run_stop_requested(run_root: Path) -> bool:
     return bool(_stop_requested or (run_root / "graceful_stop.request").is_file())
 
 
+def _coordinated_run_stop_requested(context, run_root: Path) -> bool:
+    """Return rank zero's stop decision identically on every learner rank."""
+
+    observed = _run_stop_requested(run_root) if context.is_primary else None
+    return bool(context.broadcast_object(observed))
+
+
 def apply_smoke_overrides(config: Config) -> Config:
     config = config.clone()
     config.environment.backend = "synthetic"
@@ -568,7 +575,11 @@ def main(argv=None) -> int:
         completed = episode_cursor >= int(config.train.episodes) or (
             max_environment_steps > 0 and learner.state.environment_steps >= max_environment_steps
         )
-        gracefully_stopped = _run_stop_requested(run_root)
+        # Only rank zero owns the request-file lifecycle.  Broadcasting its
+        # observation prevents a teardown race where one rank returns success
+        # while another reads the file after the supervisor has archived it
+        # and returns the temporary-resource code to torch elastic.
+        gracefully_stopped = _coordinated_run_stop_requested(context, run_root)
         if context.is_primary:
             save_checkpoint(
                 checkpoint_root / ("final.pt" if completed else "interrupted.pt"),
