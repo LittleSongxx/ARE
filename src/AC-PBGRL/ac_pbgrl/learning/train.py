@@ -518,7 +518,11 @@ def main(argv=None) -> int:
             for _ in range(update_count):
                 chunks = [replay.sample(size, device="cpu") for size in schedule.chunk_sizes if size > 0]
                 potential_chunks = None
-                if label_dataset is not None:
+                # Hierarchical label compaction performs CPU graph searches.
+                # During the auxiliary-loss warmup both scheduled weights are
+                # exactly zero, so constructing these batches cannot affect
+                # gradients and only starves the GPUs.
+                if label_dataset is not None and learner.requires_offline_potential_batch():
                     potential_chunks = [
                         label_dataset.sample(
                             size,

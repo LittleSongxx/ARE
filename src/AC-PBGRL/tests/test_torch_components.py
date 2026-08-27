@@ -248,6 +248,24 @@ def test_sac_twin_critics_are_independently_initialized():
         learner.load_state_dict(invalid_checkpoint)
 
 
+def test_offline_potential_batches_follow_auxiliary_weight_schedule():
+    config = smoke_config()
+    config.loss.warmup_steps = 10
+    config.loss.ramp_steps = 20
+    context = DistributedContext(0, 0, 1, torch.device("cpu"), False)
+    learner = DiscreteSACLearner(config, context)
+
+    learner.state.update_step = 10
+    assert not learner.requires_offline_potential_batch()
+    learner.state.update_step = 11
+    assert learner.requires_offline_potential_batch()
+
+    config.loss.potential_weight = 0.0
+    assert learner.requires_offline_potential_batch()
+    config.loss.rank_weight = 0.0
+    assert not learner.requires_offline_potential_batch()
+
+
 def test_real_map_actor_critic_action_coordinates_align():
     from ac_pbgrl.envs.ariadne.adapter import AriadneExplorationEnv
 

@@ -90,6 +90,30 @@ class DiscreteSACLearner:
     def alpha(self) -> torch.Tensor:
         return self.log_alpha.exp()
 
+    def requires_offline_potential_batch(self) -> bool:
+        """Return whether offline auxiliary supervision can affect this update."""
+        if not bool(self.config.method.potential):
+            return False
+        schedule_args = (
+            int(self.config.loss.warmup_steps),
+            int(self.config.loss.ramp_steps),
+        )
+        potential_weight = auxiliary_weight(
+            self.state.update_step,
+            float(self.config.loss.potential_weight),
+            *schedule_args,
+        )
+        if potential_weight != 0.0:
+            return True
+        if not bool(self.config.method.ranknet):
+            return False
+        rank_weight = auxiliary_weight(
+            self.state.update_step,
+            float(self.config.loss.rank_weight),
+            *schedule_args,
+        )
+        return rank_weight != 0.0
+
     def _critic_graph(self, batch: TransitionBatch, next_state: bool = False):
         if self.config.method.privileged_critic:
             graph = batch.critic_next_state if next_state else batch.critic_state
