@@ -103,6 +103,15 @@ def build_parser() -> argparse.ArgumentParser:
     figures = subparsers.add_parser("figures", help="generate paper figures from run artifacts")
     figures.add_argument("--runs-root", default=None)
     figures.add_argument("--output", default=None)
+    figures.add_argument(
+        "--evidence-level",
+        choices=(
+            "multi_seed_formal",
+            "multi_seed_credibility_pilot",
+            "single_run_directional_screening",
+        ),
+        default="multi_seed_formal",
+    )
 
     export = subparsers.add_parser("export", help="export a policy to ONNX")
     _common_config(export)
@@ -584,7 +593,11 @@ def command_figures(args) -> int:
 
     runs_root = Path(args.runs_root) if args.runs_root else default_data_root() / "runs"
     output = Path(args.output) if args.output else default_data_root() / "paper_figures"
-    generated = generate_paper_figures(runs_root, output)
+    generated = generate_paper_figures(
+        runs_root,
+        output,
+        evidence_level=str(args.evidence_level),
+    )
     print(json.dumps({"output": str(output), "files": [str(path) for path in generated]}, indent=2))
     return 0
 
@@ -970,6 +983,8 @@ def command_paper(args) -> int:
                     str(evaluation_runs),
                     "--output",
                     str(figure_root),
+                    "--evidence-level",
+                    pilot_evidence_level,
                 ]
             )
             if result:

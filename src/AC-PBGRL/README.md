@@ -156,6 +156,8 @@ pilot 复用正式运行名与 checkpoint；若结果通过，后续正式 1M �
 
 单次筛选的 manifest 会标记 `single_run_directional_screening`，只能用于判断实现是否稳定、效果方向是否值得继续，不能替代论文级多种子统计。未提供 `--single-run-screening` 时，可信 pilot 仍强制至少 3 个独立 seed。
 
+该模式的图表仍保留同一 seed 内的配对地图差值和描述性 bootstrap 区间，但不会输出 Wilcoxon/Holm p 值；`figure_manifest.json` 会把不确定性范围标记为 `map_variation_conditional_on_one_training_seed`，避免把地图 episode 误当成独立训练重复。
+
 无 root 权限的服务器可把同一命令写入用户 crontab 的 `@reboot`，并额外每分钟调用一次作为 watchdog 自身的兜底；重复调用会因项目锁立即退出。安装前应使用绝对路径，并把 stdout/stderr 重定向到 `/mnt`，不要在 crontab 或 Git 中保存 SSH 密码。
 
 ## 数据与产物

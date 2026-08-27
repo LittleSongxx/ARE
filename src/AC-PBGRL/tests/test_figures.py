@@ -78,3 +78,24 @@ def test_paper_figure_pipeline_uses_paired_artifacts(tmp_path: Path):
     assert effects["n"].min() > 0
     manifest = json.loads((output / "figure_manifest.json").read_text(encoding="utf-8"))
     assert manifest["paired_keys"] == ["seed", "map_id", "split"]
+    assert manifest["training_seed_count"] == 1
+    assert manifest["statistical_claims_supported"] is False
+
+    screening_output = tmp_path / "screening_figures"
+    generate_paper_figures(
+        runs,
+        screening_output,
+        evidence_level="single_run_directional_screening",
+    )
+    screening_effects = pd.read_csv(screening_output / "paired_effects.csv")
+    assert "wilcoxon_p" not in screening_effects
+    assert "holm_p" not in screening_effects
+    screening_manifest = json.loads(
+        (screening_output / "figure_manifest.json").read_text(encoding="utf-8")
+    )
+    assert screening_manifest["evidence_level"] == "single_run_directional_screening"
+    assert screening_manifest["inferential_statistics_included"] is False
+    assert screening_manifest["multiple_testing"] == "none"
+    assert screening_manifest["paired_uncertainty_scope"] == (
+        "map_variation_conditional_on_one_training_seed"
+    )

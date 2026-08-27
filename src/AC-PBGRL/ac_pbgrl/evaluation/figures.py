@@ -8,7 +8,12 @@ import numpy as np
 from .statistics import holm_adjust, paired_comparison
 
 
-def generate_paper_figures(runs_root: str | Path, output_dir: str | Path) -> list[Path]:
+def generate_paper_figures(
+    runs_root: str | Path,
+    output_dir: str | Path,
+    *,
+    evidence_level: str = "multi_seed_formal",
+) -> list[Path]:
     import matplotlib
 
     matplotlib.use("Agg", force=True)
@@ -31,6 +36,15 @@ def generate_paper_figures(runs_root: str | Path, output_dir: str | Path) -> lis
     if not frames:
         raise FileNotFoundError(f"no evaluation CSV files found below {runs_root}")
     data = pd.concat(frames, ignore_index=True).drop_duplicates()
+    supported_evidence_levels = {
+        "multi_seed_formal",
+        "multi_seed_credibility_pilot",
+        "single_run_directional_screening",
+    }
+    if evidence_level not in supported_evidence_levels:
+        raise ValueError(f"unsupported evidence level: {evidence_level}")
+    single_run_screening = evidence_level == "single_run_directional_screening"
+    training_seed_count = int(data["seed"].nunique()) if "seed" in data else 0
     sns.set_theme(style="whitegrid", context="paper")
     generated = []
 
@@ -145,11 +159,14 @@ def generate_paper_figures(runs_root: str | Path, output_dir: str | Path) -> lis
                     joined[f"{metric}_baseline"],
                 )
                 if result["n"]:
+                    if single_run_screening:
+                        result.pop("wilcoxon_p", None)
                     comparisons.append({"method": method, "reference": reference, "metric": metric, **result})
         if comparisons:
-            adjusted = holm_adjust([item["wilcoxon_p"] for item in comparisons])
-            for item, value in zip(comparisons, adjusted):
-                item["holm_p"] = value
+            if not single_run_screening:
+                adjusted = holm_adjust([item["wilcoxon_p"] for item in comparisons])
+                for item, value in zip(comparisons, adjusted):
+                    item["holm_p"] = value
             effect_frame = pd.DataFrame(comparisons)
             effect_frame.to_csv(output_dir / "paired_effects.csv", index=False)
             figure, axis = plt.subplots(figsize=(7.2, max(3.8, 0.34 * len(effect_frame))))
@@ -169,7 +186,11 @@ def generate_paper_figures(runs_root: str | Path, output_dir: str | Path) -> lis
             )
             axis.axvline(0.0, color="black", linewidth=1)
             axis.set_yticks(positions, labels)
-            axis.set_xlabel(f"Paired difference vs {reference} (95% bootstrap CI)")
+            axis.set_xlabel(
+                f"Descriptive paired-map difference vs {reference} (conditional on one training seed)"
+                if single_run_screening
+                else f"Paired difference vs {reference} (95% bootstrap CI)"
+            )
             figure.tight_layout()
             path = output_dir / "ablation_forest.pdf"
             figure.savefig(path, bbox_inches="tight")
@@ -351,7 +372,18 @@ def generate_paper_figures(runs_root: str | Path, output_dir: str | Path) -> lis
                 "paired_keys": ["seed", "map_id", "split"],
                 "reference": "ariadne_pi",
                 "confidence": 0.95,
-                "multiple_testing": "Holm",
+                "evidence_level": evidence_level,
+                "training_seed_count": training_seed_count,
+                "inferential_statistics_included": not single_run_screening,
+                "statistical_claims_supported": (
+                    evidence_level == "multi_seed_formal" and training_seed_count >= 3
+                ),
+                "paired_uncertainty_scope": (
+                    "map_variation_conditional_on_one_training_seed"
+                    if single_run_screening
+                    else "pooled_seed_map_pairs"
+                ),
+                "multiple_testing": "none" if single_run_screening else "Holm",
             },
             indent=2,
         ),
