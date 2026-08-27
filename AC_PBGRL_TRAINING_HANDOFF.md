@@ -1,8 +1,8 @@
 # AC-PBGRL 论文训练与监控 Handoff
 
-最后更新：2026-08-27 19:05（Asia/Shanghai）
+最后更新：2026-08-27 19:38（Asia/Shanghai）
 当前分支：`dev_kf`  
-核心实现基线：`abf8a710`
+核心实现基线：`53f80932`
 当前工作范围：只关注真实论文算法、二维训练、配对评测与实验可靠性；PPT 工作已经结束。
 
 ## 1. 本轮任务是什么
@@ -86,11 +86,11 @@ pilot 的运行名与正式运行名相同，例如 `runs/full/seed_0`。如果 
 
 ## 4. 当前服务器状态快照
 
-本节是 2026-08-27 19:14 左右的快照，PID 和数值会变化，接手后必须重新查询，不可依赖这里的 PID。
+本节是 2026-08-27 19:38 左右的快照，PID 和数值会变化，接手后必须重新查询，不可依赖这里的 PID。
 
 - 共享 `ariadne_pi` teacher 已完成并固化到 100,000 environment transitions、6,125 optimizer updates、807 episodes；checkpoint 与 replay 的 `total_added` 都是 100,000。
 - 当前 stage：使用固定 teacher 生成 20,000 个 train future-gain 标签；完成后会自动生成 2,048 个 validation 标签。
-- train manifest 已达到 4,096 samples / 4 shards；已抽检的前两个 shard 中所有有效候选标签均为有限值，teacher/map-split provenance 哈希一致。
+- train manifest 已达到 6,144 samples / 6 shards；已抽检的前两个 shard 中所有有效候选标签均为有限值，teacher/map-split provenance 哈希一致。
 - 修复后的首 shard（包含 Ray 初始化）耗时约 11 分钟，即约 1.53 samples/s；据此 train 20k 粗估约 3.6 小时，validation 粗估约 22 分钟，应以后续 shard 实测继续校正。
 - watchdog ID：`pilot`。
 - 调度硬限制：`ACPBGRL_GPU_ALLOWLIST=0,3`。
@@ -122,7 +122,7 @@ git branch --show-current
 git log -8 --oneline
 ```
 
-预期分支是 `dev_kf`，handoff 编写时核心实现已推送到 `abf8a710`。若工作树出现其他改动，先判断是否为用户改动，不要覆盖或回滚。
+预期分支是 `dev_kf`，handoff 编写时核心实现已推送到 `53f80932`。若工作树出现其他改动，先判断是否为用户改动，不要覆盖或回滚。
 
 连接训练服务器后执行只读检查：
 
@@ -244,6 +244,8 @@ du -sh "$ACPBGRL_DATA_ROOT"/{runs,replay,labels,pilot} 2>/dev/null
 
 100 maps 只是同一训练 seed 上的配对 episode，不能冒充独立训练重复。单次筛选可以否决明显无效或不稳定的设计，但不能确认方法普遍有效。只有方向值得继续时，才由用户决定启动 3-seed pilot 或正式 5-seed/1M；正式统计仍需按 seed 和 map 的层级/cluster 结构处理。
 
+单次模式的 `paired_effects.csv` 只保留描述性地图配对差值、effect size 和 bootstrap 区间，不输出 Wilcoxon/Holm p 值；`figure_manifest.json` 必须记录 `inferential_statistics_included=false`、`statistical_claims_supported=false` 和 `map_variation_conditional_on_one_training_seed`。这是为了防止把 100 个 map episode 误当成 100 个独立训练重复。
+
 ## 8. 已修复的重要故障与历史日志陷阱
 
 相关提交均已推送：
@@ -259,6 +261,7 @@ ac916582  restrict scheduler to approved GPU indices
 053a38b2  keep watchdog attached during graceful stop
 5df4f15d  restore CPU scheduling for label workers
 abf8a710  add explicit single-run screening mode
+53f80932  keep single-run figures descriptive
 ```
 
 ### DDP graceful-stop rank race
@@ -364,7 +367,7 @@ pytest -q src/AC-PBGRL/tests --disable-warnings --maxfail=1
 
 按优先级：
 
-1. 持续观察 label generation 的 CPU/Ray 吞吐和 shard manifest，确认 train 从当前 4,096 达到 20k、validation 达到 2,048；若中断，应从最后完整 manifest 续写，不能删除已完成 shard。
+1. 持续观察 label generation 的 CPU/Ray 吞吐和 shard manifest，确认 train 从当前 6,144 达到 20k、validation 达到 2,048；若中断，应从最后完整 manifest 续写，不能删除已完成 shard。
 2. 标签完成后确认流水线自动进入 `ariadne_pi/seed_0`，并重新检查 GPU allowlist、memory probe 和首个 checkpoint。
 3. 监控 `ariadne_pi/seed_0` 到 200k，再监控 `full/seed_0` 的 prephase/calibration 和 200k 训练。
 4. 200k 配对评测完成后，检查两份 episode CSV、potential samples、paired effects、代表路径和 single-run manifest；只做工程/方向诊断。
