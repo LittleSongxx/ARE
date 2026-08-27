@@ -448,6 +448,7 @@ def main(argv=None) -> int:
         while episode_cursor < int(config.train.episodes):
             if context.is_primary and _run_stop_requested(run_root):
                 collection_count = 0
+                transitions_collected = 0
             elif context.is_primary:
                 remaining_episodes = int(config.train.episodes) - episode_cursor
                 parallelism = rollout_pool.count if rollout_pool is not None else 1
