@@ -109,7 +109,10 @@ train:
   ray_address: local
   ray_cpus_per_actor: 1.0
   ray_actor_limit: 0
-  ray_actors_by_world_size: {1: 24, 2: 32, 3: 40, 4: 48}
+  # The host has 48 physical / 96 logical cores.  These values keep enough
+  # headroom for the learner and other users while reducing synchronous
+  # rollout tail latency.  They do not change the transition/update budget.
+  ray_actors_by_world_size: {1: 32, 2: 48, 3: 56, 4: 64}
 
 gpu_scheduler:
   policy: prefer-idle
@@ -124,7 +127,7 @@ gpu_scheduler:
   monitor_seconds: 30
   pressure_grace_checks: 2
   wait_seconds: 60
-  micro_batch_candidates: [32, 16, 8, 4]
+  micro_batch_candidates: [64, 32, 16, 8, 4]
 
 evaluation:
   seeds_main: [0, 1, 2, 3, 4]

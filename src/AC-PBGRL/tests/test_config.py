@@ -60,3 +60,4 @@ def test_run_manifest_retains_dynamic_gpu_sessions(tmp_path, monkeypatch):
     assert [item["world_size"] for item in payload["resource_sessions"]] == [2, 1]
     assert payload["resource_sessions"][0]["gradient_accumulation_steps"] == 2
     assert payload["resource_sessions"][1]["gradient_accumulation_steps"] == 8
+    assert [item["rollout_actor_count"] for item in payload["resource_sessions"]] == [48, 32]

@@ -23,7 +23,7 @@ def inventory():
 def test_prefer_idle_matches_shared_server_snapshot():
     selected = select_gpus(inventory(), policy="prefer-idle", min_gpus=1, max_gpus=4)
     assert [gpu.index for gpu in selected] == [0, 3]
-    assert recommended_micro_batch(selected, reserve_gib=6) == 32
+    assert recommended_micro_batch(selected, reserve_gib=6) == 64
 
 
 def test_shared_fallback_and_idle_only():
@@ -65,7 +65,7 @@ def test_memory_probe_falls_back_after_injected_oom():
         del kwargs
         micro = int(command[command.index("--micro-batch") + 1])
         calls.append(micro)
-        code = 42 if micro == 32 else 0
+        code = 42 if micro == 64 else 0
         return subprocess.CompletedProcess(command, code, stdout="probe", stderr="")
 
     selected, attempts = calibrate_micro_batch(
@@ -73,13 +73,13 @@ def test_memory_probe_falls_back_after_injected_oom():
         experiment="full",
         system=None,
         overrides=[],
-        candidates=[32, 16, 8, 4],
-        start=32,
+        candidates=[64, 32, 16, 8, 4],
+        start=64,
         reserve_gib=6,
         run=fake_run,
     )
-    assert selected == 16
-    assert calls == [32, 16]
+    assert selected == 32
+    assert calls == [64, 32]
     assert [item["return_code"] for item in attempts] == [42, 0]
 
 

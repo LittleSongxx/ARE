@@ -24,6 +24,13 @@ def build_run_manifest(config: Config, project_root: Path, *, selected_gpus=None
     world_size = int(os.environ.get("WORLD_SIZE", "1"))
     local_samples = (int(config.train.global_batch_size) + world_size - 1) // world_size
     accumulation = None if not micro_batch else (local_samples + int(micro_batch) - 1) // int(micro_batch)
+    actor_mapping = config.train.get("ray_actors_by_world_size", {})
+    rollout_actor_count = int(
+        actor_mapping.get(str(world_size), actor_mapping.get(world_size, 1))
+    )
+    explicit_actor_limit = int(config.train.get("ray_actor_limit", 0))
+    if explicit_actor_limit > 0:
+        rollout_actor_count = min(rollout_actor_count, explicit_actor_limit)
     payload = {
         "created_unix": time.time(),
         "hostname": socket.gethostname(),
@@ -40,6 +47,7 @@ def build_run_manifest(config: Config, project_root: Path, *, selected_gpus=None
         "global_batch_size": int(config.train.global_batch_size),
         "micro_batch": micro_batch,
         "gradient_accumulation_steps": accumulation,
+        "rollout_actor_count": rollout_actor_count,
     }
     try:
         import torch
@@ -69,6 +77,7 @@ def save_run_manifest(path: Path, payload: dict) -> None:
             "selected_gpu_uuids": payload["selected_gpu_uuids"],
             "micro_batch": payload["micro_batch"],
             "gradient_accumulation_steps": payload["gradient_accumulation_steps"],
+            "rollout_actor_count": payload["rollout_actor_count"],
         }
     )
     payload["initial_created_unix"] = initial_created

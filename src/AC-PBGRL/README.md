@@ -104,13 +104,16 @@ KF/GRU 方法需要先得到无时序预训练 checkpoint：
 - `prefer-idle`：空闲优先，无空闲卡时才考虑满足阈值的共享卡；
 - `shared-ok`：可主动选择所有满足安全阈值的卡。
 
-默认要求可用显存至少 18 GiB、利用率不高于 65%、温度不高于 80℃，并在进程内保留至少 6 GiB。启动前会执行真实 Actor + twin Critic + potential batch 的短前后向探测；micro-batch 按 `32 → 16 → 8 → 4` 回退。固定全局 batch 128 对应：
+默认要求可用显存至少 18 GiB、利用率不高于 65%、温度不高于 80℃，并在进程内保留至少 6 GiB。启动前会执行真实 Actor + twin Critic + potential batch 的短前后向探测；A40 从 `64 → 32 → 16 → 8 → 4` 回退。固定全局 batch 128 对应：
 
-| GPU 数 | 每卡 micro-batch 32 时的累计次数 |
-|---:|---:|
-| 4 | 1 |
-| 2 | 2 |
-| 1 | 4 |
+| GPU 数 | 每 rank 样本 | A40 有效 chunk | 累计次数 |
+|---:|---:|---:|---:|
+| 4 | 32 | 32 | 1 |
+| 3 | 43/43/42 | 43/43/42 | 1 |
+| 2 | 64 | 64 | 1 |
+| 1 | 128 | 64 | 2 |
+
+CPU rollout 默认按 48 个物理核留出系统余量后扩展为 1/2/3/4 卡对应 32/48/56/64 个 Ray actor。GPU 数、actor 数或 micro-batch 的变化都不改变统一的 environment-transition、optimizer-update 和 global-batch 预算。
 
 supervisor 每 30 秒记录资源与外部 GPU 进程。显存余量连续不足、收到信号或 CUDA OOM 时，只终止自己创建的进程组，在更新边界使用原子 checkpoint 退出；随后重新选卡并续训。项目锁只协调 AC-PBGRL 自己的任务，不会结束或抢占其他用户进程。`run_manifest.json` 保留所有 4→2→1 卡资源会话，`supervisor/**/events.jsonl` 保存等待、压力、OOM 和重启事件。
 

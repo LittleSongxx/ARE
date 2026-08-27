@@ -43,6 +43,8 @@ class RayRolloutPool:
             ray.init(
                 address=None if address in {"", "local", "none"} else address,
                 _temp_dir=str(ray_root),
+                num_cpus=self.count,
+                num_gpus=0,
                 include_dashboard=False,
                 log_to_driver=False,
                 ignore_reinit_error=True,

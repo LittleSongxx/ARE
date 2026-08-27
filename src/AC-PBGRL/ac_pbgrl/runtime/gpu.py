@@ -166,6 +166,11 @@ def recommended_micro_batch(gpus: Sequence[GPUInfo], reserve_gib: float = 6.0) -
     if not gpus:
         return 0
     usable = min(gpu.free_gib - reserve_gib for gpu in gpus)
+    # A40-class 48 GB cards can usually train a 64-sample local chunk while
+    # preserving the configured reserve.  The disposable real-model probe is
+    # still authoritative and falls back before a training process is launched.
+    if usable >= 36:
+        return 64
     if usable >= 24:
         return 32
     if usable >= 14:
