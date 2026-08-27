@@ -87,10 +87,10 @@ pilot 的运行名与正式运行名相同，例如 `runs/full/seed_0`。如果 
 
 ## 4. 当前服务器状态快照
 
-本节是 2026-08-28 01:20 左右的快照，PID 和数值会变化，接手后必须重新查询，不可依赖这里的 PID。
+本节是 2026-08-28 02:37 左右的快照，PID 和数值会变化，接手后必须重新查询，不可依赖这里的 PID。
 
 - 共享 `ariadne_pi` teacher 已完成并固化到 100,000 environment transitions、6,125 optimizer updates、807 episodes；checkpoint 与 replay 的 `total_added` 都是 100,000。
-- 当前 stage：train/validation future-gain 标签均已完成并通过最终审计；`ariadne_pi/seed_0` 正在向 200k transitions 训练。01:18:46 的 50% 里程碑 checkpoint 为 103,804 environment transitions、832 episodes、6,362 optimizer updates；随后一轮 rollout 已把磁盘 replay 推进到 109,820，正在执行对应 update wave。
+- 当前 stage：train/validation future-gain 标签均已完成并通过最终审计；`ariadne_pi/seed_0` 正在向 200k transitions 训练。02:35:47 的 75% 里程碑 checkpoint 为 150,385 environment transitions、1,216 episodes、9,274 optimizer updates；随后一轮 rollout 已把磁盘 replay 推进到 156,139，正在执行对应 update wave。
 - train manifest 已完成 20,000 samples / 20 shards（19 × 1,024 + 544）；最终聚合审计确认全部 325,820 个有效候选标签、node/edge features 与 mask 均通过完整性检查，teacher/map-split provenance 哈希一致。
 - 最终 train 标签分布未退化：均值 `-0.832`、标准差 `0.761`、范围 `[-3.746, 2.913]`，按六位小数约有 208,225 个唯一值。
 - validation manifest 已完成 2,048 samples / 2 shards，共 33,414 个有效动作标签；全部 510 张 validation 地图均来自 validation split，与 train/OOD/IID-test 的地图重叠为 0，provenance 与 train 完全一致。
@@ -108,6 +108,8 @@ pilot 的运行名与正式运行名相同，例如 `runs/full/seed_0`。如果 
 - 25% 最新 aggregate 为 Q loss `37.48/37.65`、Q gradient `218.40`、target `70.32`、entropy `2.604`、alpha `0.753`，仍处于已稳定完成 100k 的 teacher 轨迹包络内。全部 400 个在线训练 episode 成功率 4.0%；最近 192 个 episode 成功率 5.2%、平均覆盖率 0.581、平均回报 -48.99，未出现策略坍缩；这些训练地图噪声样本不可提前当作固定地图效果评测。
 - 50% checkpoint 可重新加载，内嵌 replay、learner state 与更新预算完全对齐：`total_added=103,804`、`update_step=6,362`、`update_credit=0.75`，SHA256 为 `64c3a0466a2f7aba48985772c319744c457bb10242e3ffcfb5bc425c9380ad35`。checkpoint 的 1,188 个浮点张量、共 14,829,450 个元素全部有限；Actor、双 Q 与 target Q 的参数绝对值最大值均小于 1.04，Actor/Q1/Q2/alpha 四组 optimizer step 全部为 6,362。
 - 截至 50% checkpoint 的 897 条 train metrics 所有数值字段均有限。最新 aggregate 为 Q loss `42.53/43.44`、Q gradient `497.60`、target `80.68`、entropy `2.599`、alpha `0.540`；最近 192 个在线训练 episode 成功率 12.5%、平均覆盖率 0.713、平均回报 -44.63。该变化是训练健康信号，不替代 200k 固定 100-map 配对评测。
+- 75% checkpoint 可重新加载，内嵌 replay、learner state 与更新预算完全对齐：`total_added=150,385`、`update_step=9,274`、`update_credit=0.0625`，SHA256 为 `d761daaa3cd88a66ebc334b0055fad069abfb094311d8518c522a50e00b89e67`。1,188 个浮点张量、共 14,829,450 个元素全部有限；Actor、双 Q 与 target Q 参数绝对值最大值仍小于 1.04，双 Q 不相同，四组 optimizer step 全部为 9,274。
+- 75% 最新 aggregate 为 Q loss `20.24/21.11`、Q gradient `699.54`、target `57.14`、entropy `2.554`、alpha `0.404`；所有 1,258 条 train metrics 数值字段均有限。最早 192 个在线 episode 成功率 2.1%、平均覆盖率 0.570、平均回报 -49.90；最近 192 个为 21.9%、0.761、-38.03，最近 48 个为 29.2%、0.766、-32.32。该训练地图趋势只证明策略未坍缩，不替代固定 100-map 评测。
 - 当前 supervisor event 只有成功的 micro-batch 64 显存探测和物理 GPU `[0, 3]` 双卡 launch；没有 resource-pressure、OOM、NCCL 或重启事件，watchdog heartbeat 持续每 30 秒更新。
 - 远端发布目录不带 `.git` 元数据，但 `cli.py`、`learning/train.py`、`learning/sac.py`、`runtime/supervisor.py` 与 `server_watchdog.sh` 五个关键文件的 SHA256 已和本地逐项核对完全一致，后续 full 阶段不会加载漂移源码。
 - update wave 时 GPU 0/3 各占约 27.5 GiB，利用率通常 90%～100%，温度约 74/78°C、功耗约 250W，未出现硬件或软件 thermal throttle；rollout/checkpoint 边界的单卡瞬时低利用率不代表训练停止。
@@ -382,7 +384,7 @@ pytest -q src/AC-PBGRL/tests --disable-warnings --maxfail=1
 
 按优先级：
 
-1. 继续监控 `ariadne_pi/seed_0` 从当前 109,820 replay 进度到完整 200k checkpoint；保持物理 GPU allowlist `[0,3]`，按完整 update wave 判断推进，不因单次 GPU 空闲或日志间隔重启。
+1. 继续监控 `ariadne_pi/seed_0` 从当前 156,139 replay 进度到完整 200k checkpoint；保持物理 GPU allowlist `[0,3]`，按完整 update wave 判断推进，不因单次 GPU 空闲或日志间隔重启。
 2. 到达 200k 后确认流水线自动启动 `full/seed_0`：先以 `method.temporal=none` 训练 30k pre-phase，再用独立 validation 标签完成 KF variance temperature 校准，随后无损续训到 200k。检查温度未落到 `1e-3/1e3` 边界且 KF 方差没有退化。
 3. 两个 200k checkpoint 完成后，检查固定相同 100 张 IID 地图的两份 episode CSV、potential samples、paired effects、代表路径和 single-run manifest；只做工程/方向诊断。
 4. 流水线随后依次将 `ariadne_pi/seed_0` 和 `full/seed_0` 从 200k 无损续训到 500k；不修改正式 warm-up/ramp、标签定义或 map split，并在 full 500k 后重新校准。
