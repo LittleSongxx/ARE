@@ -1,8 +1,8 @@
 # AC-PBGRL 论文训练与监控 Handoff
 
-最后更新：2026-08-27 18:40（Asia/Shanghai）
+最后更新：2026-08-27 19:05（Asia/Shanghai）
 当前分支：`dev_kf`  
-核心实现基线：`5df4f15d`
+核心实现基线：`abf8a710`
 当前工作范围：只关注真实论文算法、二维训练、配对评测与实验可靠性；PPT 工作已经结束。
 
 ## 1. 本轮任务是什么
@@ -24,14 +24,16 @@ AC-PBGRL 的论文主线为：
 
 正式主对比原计划是每种方法 `5 seeds × 1M transitions`。含义是：每种方法独立训练 5 个模型，每个模型经历 1,000,000 条环境 transition；每个 seed 都有不同的初始化、探索轨迹和 replay 采样。它不是同一个模型评测 5 次。
 
-在尚未确认完整方法确有收益之前，直接投入完整主对比和消融会消耗数周。因此当前已切换为最小可信预验证：
+在尚未确认完整方法确有收益之前，直接投入完整主对比和消融会消耗数周。用户已明确要求当前先让每个对比版本只跑一次，因此现阶段是单次方向筛选，不是多种子可信 pilot：
 
 - 只比较 `ariadne_pi` 与 `full`；
-- 使用训练 seed `0, 1, 2`，即最低限度的 3 个独立训练重复；
+- 每种方法只训练 seed `0` 一次；
 - 每个 run 先到 200k transitions，生成早期诊断；
-- 随后从同一 checkpoint 无损续训到 500k transitions，再做 pilot 判断；
+- 随后从同一 checkpoint 无损续训到 500k transitions，再判断优化方向是否值得投入多种子；
 - 每个 checkpoint 使用相同的 IID map 子集和 seed 做 100-map 配对评测；
 - teacher、标签、baseline 与 full 的 checkpoint、replay 都可被后续正式 1M 流程继续复用。
+
+单个训练 seed 只能发现实现故障、明显负迁移和描述性的配对地图改善，不能估计训练随机性，也不能支持论文统计结论。代码要求显式提供 `--single-run-screening --pilot-seeds 1`，并在结果 manifest 标记 `single_run_directional_screening`；未提供该开关时，可信 pilot 仍强制至少 3 个独立 seed。
 
 不能把 100k 当作有效的优化效果验证点。正式配置为：
 
@@ -50,7 +52,7 @@ warm-up 结束：10,000 / 0.0625 = 160,000 transitions
 
 200k 只用于发现发散、NaN、策略坍缩或明显负迁移，不应据此宣称方法有效或调参追结果。500k 是不改变正式超参数时，能完整经历辅助损失 schedule 的最小可信训练预算。
 
-总 pilot 训练量为 `2 methods × 3 seeds × 500k = 3M transitions`，另有 100k teacher、20k/2,048 个 train/validation 标签及两次配对评测。两张 A40 的当前估计为约 4～6 天；应在第一个完整 200k run 后用实际吞吐重新估计。
+当前筛选训练量为 `2 methods × 1 seed × 500k = 1M transitions`，另有已经完成的 100k teacher、20k/2,048 个 train/validation 标签及两次配对评测。应在第一个完整 200k run 后用实际吞吐重新估计总时间。
 
 ## 3. 当前无人值守流水线的精确顺序
 
@@ -58,7 +60,8 @@ warm-up 结束：10,000 / 0.0625 = 160,000 transitions
 
 ```bash
 ./run.sh paper --pilot-only \
-  --pilot-seeds 3 \
+  --single-run-screening \
+  --pilot-seeds 1 \
   --pilot-early-steps 200000 \
   --pilot-steps 500000 \
   --gpus auto \
@@ -70,24 +73,24 @@ warm-up 结束：10,000 / 0.0625 = 160,000 transitions
 1. 将共享的 `ariadne_pi` teacher 训练到 100k；若已有 checkpoint 则自动恢复。
 2. 创建或复用 leakage-safe map split。
 3. 生成/续生成 20,000 个 train future-gain 标签和 2,048 个 validation 标签。
-4. 将 `ariadne_pi/seed_{0,1,2}` 分别训练到 200k。
-5. 对 `full/seed_{0,1,2}` 先完成 30k temporal/KF calibration prephase，再分别训练到 200k。
-6. 在固定单卡上对六个 checkpoint 做相同 100-map IID 配对评测，写入 `pilot/step_200000`，并绘图。
-7. 将三个 `ariadne_pi` run 从 200k 续到 500k。
-8. 将三个 `full` run 从 200k 续到 500k。
-9. 用 validation 标签重新校准三个 full checkpoint 的 uncertainty/KF temperature。
-10. 再做相同的配对评测，写入 `pilot/step_500000`，绘图并原子写 manifest。
+4. 将 `ariadne_pi/seed_0` 训练到 200k。
+5. 对 `full/seed_0` 先完成 30k temporal/KF calibration prephase，再训练到 200k。
+6. 在固定单卡上对两个 checkpoint 做相同 100-map IID 配对评测，写入 `pilot/step_200000`，并绘图。
+7. 将 `ariadne_pi/seed_0` 从 200k 续到 500k。
+8. 将 `full/seed_0` 从 200k 续到 500k。
+9. 用 validation 标签重新校准 full checkpoint 的 uncertainty/KF temperature。
+10. 再做相同的配对评测，写入 `pilot/step_500000`，绘图并原子写 single-run manifest。
 11. watchdog 写入 `pilot_pipeline.complete` 后退出；它不会自动进入完整 5-seed/1M 正式实验。
 
 pilot 的运行名与正式运行名相同，例如 `runs/full/seed_0`。如果 pilot 通过，后续正式流程会从 500k 继续到 1M，而不是重练前 500k。
 
 ## 4. 当前服务器状态快照
 
-本节是 2026-08-27 18:40 左右的快照，PID 和数值会变化，接手后必须重新查询，不可依赖这里的 PID。
+本节是 2026-08-27 19:14 左右的快照，PID 和数值会变化，接手后必须重新查询，不可依赖这里的 PID。
 
 - 共享 `ariadne_pi` teacher 已完成并固化到 100,000 environment transitions、6,125 optimizer updates、807 episodes；checkpoint 与 replay 的 `total_added` 都是 100,000。
 - 当前 stage：使用固定 teacher 生成 20,000 个 train future-gain 标签；完成后会自动生成 2,048 个 validation 标签。
-- 18:38 已写出首个 train shard 和原子 manifest：1,024 samples，16,624 个有效候选标签均为有限值，teacher/map-split provenance 哈希一致。
+- train manifest 已达到 4,096 samples / 4 shards；已抽检的前两个 shard 中所有有效候选标签均为有限值，teacher/map-split provenance 哈希一致。
 - 修复后的首 shard（包含 Ray 初始化）耗时约 11 分钟，即约 1.53 samples/s；据此 train 20k 粗估约 3.6 小时，validation 粗估约 22 分钟，应以后续 shard 实测继续校正。
 - watchdog ID：`pilot`。
 - 调度硬限制：`ACPBGRL_GPU_ALLOWLIST=0,3`。
@@ -96,8 +99,8 @@ pilot 的运行名与正式运行名相同，例如 `runs/full/seed_0`。如果 
 - watchdog、paper driver、label driver 和 32 个 Ray `LabelWorker` 均已确认存在。
 - 标签 Ray runtime 只发布 32 CPU、0 GPU；worker niceness 为 0，affinity 为 `0-95`，不会再全部拥挤在 `0,48`。
 - watchdog heartbeat 每 30 秒更新，且 cron 同时配置 `@reboot` 与每分钟兜底调用，因此本地 terminal、SSH 或 Codex 对话关闭不会终止训练。
-- 远端完整测试：43 passed。
-- 本地测试：26 passed、1 skipped；跳过原因是本地宿主 Python 没装 PyTorch，不是代码失败。
+- 远端完整测试：44 passed。
+- 本地测试：27 passed、1 skipped；跳过原因是本地宿主 Python 没装 PyTorch，不是代码失败。
 
 远端连接地址、用户名、密码和私有绝对路径按项目约束不写入 Git。新会话应从用户提供的连接信息或本机 SSH config 获取；若信息不可见，应重新向用户索取。禁止把认证信息加入命令脚本、README、handoff、Git history 或日志。
 
@@ -119,7 +122,7 @@ git branch --show-current
 git log -8 --oneline
 ```
 
-预期分支是 `dev_kf`，handoff 编写时核心实现已推送到 `053a38b2`，handoff 文档提交位于其后。若工作树出现其他改动，先判断是否为用户改动，不要覆盖或回滚。
+预期分支是 `dev_kf`，handoff 编写时核心实现已推送到 `abf8a710`。若工作树出现其他改动，先判断是否为用户改动，不要覆盖或回滚。
 
 连接训练服务器后执行只读检查：
 
@@ -217,7 +220,7 @@ du -sh "$ACPBGRL_DATA_ROOT"/{runs,replay,labels,pilot} 2>/dev/null
 
 由于辅助权重尚未 fully ramped，不要根据 200k 的轻微输赢修改正式超参数，也不要把它当论文结果。
 
-### 500k：最小可信 go/no-go pilot
+### 500k：单次方向筛选
 
 优先看：
 
@@ -231,16 +234,15 @@ du -sh "$ACPBGRL_DATA_ROOT"/{runs,replay,labels,pilot} 2>/dev/null
 - Spearman、Kendall、pairwise accuracy、top-1 regret；
 - uncertainty calibration、coverage、KF NIS/reset/event 次数。
 
-建议的筛选门槛，不是正式论文显著性结论：
+建议只做方向判断：
 
-1. full 在至少 2/3 个训练 seed 上，对主要距离指标方向一致地优于 ARiADNE+PI；
-2. 汇总配对距离改善最好达到约 3% 以上，而不是只靠极少异常地图；
-3. success rate 不应出现超过约 2 个百分点的明显回退；
-4. potential ranking 必须显著高于随机，并且 uncertainty calibration 不能完全失真；
-5. 规划延迟、内存和节点预算仍满足可部署范围；
-6. 收益应能通过代表路径与行为指标解释，而非只有 reward 上升。
+1. 比较同一 100-map 子集上的 paired distance 分布，确认改善不是只靠极少异常地图；描述性改善最好达到约 3% 以上；
+2. success rate 不应出现超过约 2 个百分点的明显回退；
+3. potential ranking 必须明显高于随机，并且 uncertainty calibration 不能完全失真；
+4. 规划延迟、内存和节点预算仍满足可部署范围；
+5. 收益应能通过代表路径与行为指标解释，而非只有 reward 上升。
 
-100 maps × 3 seeds 不等于 300 个独立训练 seed。pilot 图表可用于筛选，但正式论文统计仍应按训练 seed 和 map 的层级/cluster 结构处理，避免把同一模型上的地图 episode 当作完全独立样本。正式 5-seed 阶段前应复核统计实现是否需要 hierarchical bootstrap 或 seed-level aggregate。
+100 maps 只是同一训练 seed 上的配对 episode，不能冒充独立训练重复。单次筛选可以否决明显无效或不稳定的设计，但不能确认方法普遍有效。只有方向值得继续时，才由用户决定启动 3-seed pilot 或正式 5-seed/1M；正式统计仍需按 seed 和 map 的层级/cluster 结构处理。
 
 ## 8. 已修复的重要故障与历史日志陷阱
 
@@ -256,6 +258,7 @@ c164ddcd  initialize zero-transition stop branch
 ac916582  restrict scheduler to approved GPU indices
 053a38b2  keep watchdog attached during graceful stop
 5df4f15d  restore CPU scheduling for label workers
+abf8a710  add explicit single-run screening mode
 ```
 
 ### DDP graceful-stop rank race
@@ -355,19 +358,19 @@ bash -n src/AC-PBGRL/scripts/server_watchdog.sh
 pytest -q src/AC-PBGRL/tests --disable-warnings --maxfail=1
 ```
 
-远端完整测试应显式避免占用训练 GPU，例如设置空的 `CUDA_VISIBLE_DEVICES`，并在 CPU 资源允许时执行。handoff 编写时最新结果为 41 passed。
+远端完整测试应显式避免占用训练 GPU，例如设置空的 `CUDA_VISIBLE_DEVICES`，并在 CPU 资源允许时执行。部署 `abf8a710` 后最新结果为 44 passed。
 
 ## 12. 接下来应做什么
 
 按优先级：
 
-1. 持续观察 label generation 的 CPU/Ray 吞吐和 shard manifest，确认 train 从当前 1,024 达到 20k、validation 达到 2,048；若中断，应从最后完整 manifest 续写，不能删除已完成 shard。
+1. 持续观察 label generation 的 CPU/Ray 吞吐和 shard manifest，确认 train 从当前 4,096 达到 20k、validation 达到 2,048；若中断，应从最后完整 manifest 续写，不能删除已完成 shard。
 2. 标签完成后确认流水线自动进入 `ariadne_pi/seed_0`，并重新检查 GPU allowlist、memory probe 和首个 checkpoint。
-3. 监控三个 ARiADNE+PI seed 到 200k，再监控三个 full seed 的 prephase/calibration 和 200k 训练。
-4. 200k 配对评测完成后，检查六份 episode CSV、potential samples、paired effects、代表路径和 manifest；只做工程/方向诊断。
+3. 监控 `ariadne_pi/seed_0` 到 200k，再监控 `full/seed_0` 的 prephase/calibration 和 200k 训练。
+4. 200k 配对评测完成后，检查两份 episode CSV、potential samples、paired effects、代表路径和 single-run manifest；只做工程/方向诊断。
 5. 流水线继续到 500k，不修改正式 warm-up/ramp 或数据 split。
-6. 500k 完成后按第 7 节做 go/no-go 分析，并输出每 seed 与聚合结果，不只报告最好 seed。
-7. 若 pilot 通过，再由用户确认是否启动正式主对比：ARiADNE、ARiADNE+PI、Q-distillation、full，各 5 seeds × 1M；现有两个方法的前三个 seed 从 500k 续训。
+6. 500k 完成后按第 7 节做单次方向分析，明确标注不能支持统计结论。
+7. 若方向值得继续，再由用户确认先扩为 3-seed pilot，或启动正式主对比：ARiADNE、ARiADNE+PI、Q-distillation、full，各 5 seeds × 1M；现有两个方法的 seed 0 从 500k 续训。
 8. 正式主对比通过后再投入完整消融，避免提前消耗计算。
 9. 正式论文统计前审计 paired bootstrap/Wilcoxon 的层级独立性，并补 small-to-large、IID/OOD、latency 和失败案例。
 
