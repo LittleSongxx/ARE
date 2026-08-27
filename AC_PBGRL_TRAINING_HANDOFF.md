@@ -87,10 +87,10 @@ pilot 的运行名与正式运行名相同，例如 `runs/full/seed_0`。如果 
 
 ## 4. 当前服务器状态快照
 
-本节是 2026-08-28 05:21 左右的快照，PID 和数值会变化，接手后必须重新查询，不可依赖这里的 PID。
+本节是 2026-08-28 05:34 左右的快照，PID 和数值会变化，接手后必须重新查询，不可依赖这里的 PID。
 
 - 共享 `ariadne_pi` teacher 已完成并固化到 100,000 environment transitions、6,125 optimizer updates、807 episodes；checkpoint 与 replay 的 `total_added` 都是 100,000。
-- 当前 stage：train/validation future-gain 标签与 `ariadne_pi/seed_0` 200k 均已完成；`full/seed_0` 在修复 validation calibration 抽样后从零重跑 30k `method.temporal=none` prephase。新 run 已于 05:18 启动并完成 2,000 条 minimum replay warmup，尚未生成 KF 轨迹或 calibration 文件。
+- 当前 stage：train/validation future-gain 标签与 `ariadne_pi/seed_0` 200k 均已完成；`full/seed_0` 在修复 validation calibration 抽样后从零重跑 30k `method.temporal=none` prephase。新 run 已于 05:18 启动，05:29 完成第一个正式 update wave 并已进入后续 wave；尚未生成正式 KF 轨迹或 calibration 文件。
 - train manifest 已完成 20,000 samples / 20 shards（19 × 1,024 + 544）；最终聚合审计确认全部 325,820 个有效候选标签、node/edge features 与 mask 均通过完整性检查，teacher/map-split provenance 哈希一致。
 - 最终 train 标签分布未退化：均值 `-0.832`、标准差 `0.761`、范围 `[-3.746, 2.913]`，按六位小数约有 208,225 个唯一值。
 - validation manifest 已完成 2,048 samples / 2 shards，共 33,414 个有效动作标签；全部 510 张 validation 地图均来自 validation split，与 train/OOD/IID-test 的地图重叠为 0，provenance 与 train 完全一致。
@@ -116,8 +116,11 @@ pilot 的运行名与正式运行名相同，例如 `runs/full/seed_0`。如果 
 - 该修复先通过本地 28 passed / 1 skipped、远端定向 1 passed 和远端 CPU-only 全套 46 passed，再同步远端；三个修改文件 SHA256 与本地完全一致。通过 request-file 边界优雅保存并恢复，断点精确为 `environment_steps=8,092`、`episodes=64`、`update_step=380`、`update_credit=0.75`，checkpoint replay 与磁盘 replay 都为 8,092，没有信号中断或进度丢失。
 - 已归档尝试中的修复后 384-update 波从 04:29:06 运行至 04:37:31，约 8 分 25 秒；旧逻辑同量级 380-update 波约 23 分 18 秒，实测提速约 2.77 倍。连续 30 秒 `nvidia-smi dmon` 中两张卡的 SM 利用率均保持在约 71%～100%，未再出现连续 0%，每卡显存约 21.0 GiB。采样阶段由约 48 个 Ray worker 并行使用 CPU，更新阶段则以两个 DDP rank 和 GPU 为主，因此不能用整机 CPU 是否 100% 判断训练是否工作。
 - 旧 `fit_variance_calibration` 即使 `samples=2,048` 等于 validation dataset 全长，仍逐 batch 有放回抽样；首次报告的 `action_targets=33,432` 与完整 manifest 的 33,414 不符，证明出现重复状态并遗漏部分 held-out 状态。`4b89c704` 改为固定 seed 的无放回索引，报告新增 sampling strategy/seed/index hash，并拒绝非正 sample/batch size；本地 28 passed / 1 skipped、远端定向 1 passed、远端 CPU-only 全套 47 passed。
+- 修复后又用已归档的旧 30k checkpoint 做了一次 CPU-only 旁路诊断，输出仅写入 archive，未覆盖任何正式产物。诊断严格为 `states=2,048` / `action_targets=33,414` / `sampling=deterministic_without_replacement` / `sampling_seed=1907`，索引 SHA256 为 `6a9b0fc1261f3298cc939fe30d10ab7d2b39ff9e6077937c0009adca7de8445f`；action temperature 为 `0.6894676464`，未落到数值边界。诊断 JSON SHA256 为 `74de2ba9ebb31ecb50af7bc08bb531f176625cc4fb510085cc5eb24af0044e87`。region unconstrained temperature 为 `1.6719451941`，为保持 action variance 分解的非负性被约束到 action temperature，因此 region NLL 变差；这是当前方差嵌套约束的已知诊断项，不应在单次筛选中据此调参。
 - 旧校准完成到发出暂停请求之间已有一个 rollout 在途，replay 从 30,000 增至 35,880；为避免把使用旧温度的 5,880 条轨迹混入正式 run，按安全协议临时禁用 cron、只向已核验 watchdog PID 发 SIGTERM，并在 update 边界得到 `environment_steps=35,880`、`update_step=2,117`、`update_credit=0.5` 的完整 interrupted checkpoint。该尝试的 run/replay/calibration/supervisor 全部可恢复地移动到 `archive/invalid-full-calibration-with-replacement-20260828-051446`，没有删除。
 - watchdog 进程树完全退出后已恢复原 cron；新 paper driver 只对已完成的 `ariadne_pi` 做无新增 transition 的完成性检查，随后从零启动 `full` 30k prephase。没有 resource-pressure、OOM 或 NCCL 事件，GPU 1/2 未被本项目使用。
+- 全新 `full` 首个正式 wave 从 05:21:12 的 8,092 transitions 运行至 05:29:28，约 8 分 16 秒，与修复后的吞吐预期一致。checkpoint 内部精确为 `environment_steps=8,092`、`episodes=64`、`update_step=380`、`update_credit=0.75`、`target_counter=60`，内嵌 replay 的 size/cursor/total_added 均为 8,092；遍历的 1,236 个张量共有 15,435,045 个元素，其中所有浮点/复数值都有限，双 Q 网络 84/84 个可比张量均不同，四类 optimizer step 全部为 380。`latest.pt` SHA256 为 `e297a8f4d347d892f61190aee04bad724ee8b8ee312c928e033fccd77da76f34`。
+- 首波 aggregate 为 Q loss `1.374/1.437`、Q gradient `33.03`、target `7.245`、entropy `2.657`、alpha `0.981`；全部有限。`policy/auxiliary_weight=0` 且 potential/region/rank 损失均为 0，证明 `7233e4ae` 在正式新 run 的零权重 warmup 中按预期生效。20 秒 GPU dmon 中物理 GPU 0/3 的 SM 多数为 76%～100%，显存带宽多数为 79%～100%，每卡约 21.0 GiB，未出现持续空转。
 - 远端发布目录不带 `.git` 元数据；本次修改的 `learning/calibration.py` 与回归测试 SHA256 已和本地逐项核对完全一致，其他既有关键发布文件未改动。
 - supervisor 运行中每 30 秒检查资源压力；任一已选 GPU 连续 2 次严格高于配置上限 80°C 时，会写请求文件并等待当前 update 边界优雅 checkpoint/重启，而不是直接杀训练。单次读数等于 80°C 不触发；硬件 slowdown 阈值为 95°C。若发生重复温度重启，应先核对风道、外部 GPU 进程和 event 记录，再决定是否降低 micro-batch 或功耗，不能手工 kill rank。
 - 远端完整测试：47 passed。
@@ -390,7 +393,7 @@ pytest -q src/AC-PBGRL/tests --disable-warnings --maxfail=1
 
 按优先级：
 
-1. 继续监控全新 `full/seed_0` 从当前 2,000 replay 完成 30k `method.temporal=none` prephase；确认 `7233e4ae` 的零权重跳过仍生效，并保持物理 GPU allowlist `[0,3]`。
+1. 继续监控全新 `full/seed_0` 从已审计的 8,092-transition 首波完成 30k `method.temporal=none` prephase；确认 `7233e4ae` 的零权重跳过持续生效，并保持物理 GPU allowlist `[0,3]`。
 2. 30k prephase 完成后，确认 `4b89c704` 的报告严格为 `states=2,048`、`action_targets=33,414`、`sampling=deterministic_without_replacement`，索引哈希存在；再检查温度未落到 `1e-3/1e3` 边界、KF 方差没有退化，并无损续训到 200k。约 160k 后辅助权重开始非零，离线标签处理会按设计恢复；若此时吞吐再次成为主要瓶颈，应优化为等价的并行/预计算路径，不能跳过非零损失。
 3. 两个 200k checkpoint 完成后，检查固定相同 100 张 IID 地图的两份 episode CSV、potential samples、paired effects、代表路径和 single-run manifest；只做工程/方向诊断。
 4. 流水线随后依次将 `ariadne_pi/seed_0` 和 `full/seed_0` 从 200k 无损续训到 500k；不修改正式 warm-up/ramp、标签定义或 map split，并在 full 500k 后重新校准。
