@@ -45,6 +45,7 @@ class RayRolloutPool:
                 _temp_dir=str(ray_root),
                 num_cpus=self.count,
                 num_gpus=0,
+                _system_config={"worker_niceness": 0},
                 include_dashboard=False,
                 log_to_driver=False,
                 ignore_reinit_error=True,
@@ -55,10 +56,21 @@ class RayRolloutPool:
         @ray.remote(num_cpus=float(config.train.get("ray_cpus_per_actor", 1.0)), max_restarts=1)
         class RolloutWorker:
             def __init__(self, config_payload: dict, worker_index: int) -> None:
+                import os
                 import sys
 
                 if project_path not in sys.path:
                     sys.path.insert(0, project_path)
+                # OpenMP may pin the thread that launches Ray to one physical
+                # core.  Ray children inherit that two-hyperthread mask even
+                # though the node advertises many CPUs.  A worker can safely
+                # expand its own mask back to the host/cgroup CPU set; Ray's
+                # num_cpus reservation still controls actor concurrency.
+                if hasattr(os, "sched_setaffinity"):
+                    try:
+                        os.sched_setaffinity(0, range(int(os.cpu_count() or 1)))
+                    except OSError:
+                        pass
                 from ac_pbgrl.config import Config
                 from ac_pbgrl.learning.rollout import EpisodeCollector
                 from ac_pbgrl.learning.train import build_environment, build_q_teacher
