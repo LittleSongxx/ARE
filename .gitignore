@@ -61,6 +61,11 @@ src/**/model/
 # Training results
 src/*/results/
 
+# AC-PBGRL is intentionally self-contained; its fixed paper benchmark maps are
+# versioned with the implementation despite the general workspace map rule.
+!src/AC-PBGRL/maps/
+!src/AC-PBGRL/maps/**
+
 # Exploration results
 exploration_results/
 

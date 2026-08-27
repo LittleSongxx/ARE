@@ -1,0 +1,6 @@
+main:
+  configs: [ariadne, ariadne_pi, q_distillation, full]
+  seeds: [0, 1, 2, 3, 4]
+ablations:
+  configs: [potential_mse, potential_nll, potential_nll_rank, potential_kf, potential_diffusion, ema_control, gru_control]
+  seeds: [0, 1, 2]

@@ -1,0 +1,8 @@
+method:
+  privileged_critic: true
+  potential: false
+  ranknet: false
+  q_distillation: true
+  temporal: none
+  graph_diffusion: false
+  hierarchy: false

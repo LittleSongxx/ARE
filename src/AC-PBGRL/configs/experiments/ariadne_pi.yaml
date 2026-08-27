@@ -1,0 +1,7 @@
+method:
+  privileged_critic: true
+  potential: false
+  ranknet: false
+  temporal: none
+  graph_diffusion: false
+  hierarchy: false

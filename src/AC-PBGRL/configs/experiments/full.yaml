@@ -1,0 +1,8 @@
+method:
+  privileged_critic: true
+  potential: true
+  potential_loss: nll
+  ranknet: true
+  temporal: kf
+  graph_diffusion: true
+  hierarchy: true

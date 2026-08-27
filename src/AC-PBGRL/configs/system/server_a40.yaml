@@ -1,0 +1,8 @@
+project:
+  data_root: /mnt/songensheng/ac-pbgrl
+train:
+  bf16: true
+gpu_scheduler:
+  policy: prefer-idle
+  min_gpus: 1
+  max_gpus: 4

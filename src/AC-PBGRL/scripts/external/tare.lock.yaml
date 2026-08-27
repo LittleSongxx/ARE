@@ -1,0 +1,5 @@
+repository: https://github.com/caochao39/tare_planner.git
+branch: melodic-noetic
+commit: 44500592b86138257273e0cab264e6a847ccefc7
+ortools: 9.8.3296
+role: ROS/Gazebo physical-metric baseline only

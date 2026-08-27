@@ -1,0 +1,4 @@
+environment:
+  backend: ros
+evaluation:
+  fixed_latency_device: cpu

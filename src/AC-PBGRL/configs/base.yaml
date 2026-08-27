@@ -1,0 +1,137 @@
+project:
+  name: ac_pbgrl
+  data_root: auto
+  maps_dir: maps
+  run_name: auto
+  seed: 0
+
+environment:
+  backend: ariadne
+  max_episode_steps: 128
+  node_feature_dim: 4
+  critic_feature_dim: 5
+  node_padding: 360
+  critic_node_padding: 512
+  candidate_padding: 25
+  edge_feature_dim: 4
+  completion_threshold: 0.95
+  distance_weight: 5.0
+  terminal_reward: 20.0
+
+model:
+  embedding_dim: 128
+  heads: 8
+  encoder_layers: 6
+  dropout: 0.0
+  logvar_min: -8.0
+  logvar_max: 4.0
+
+method:
+  privileged_critic: true
+  potential: true
+  potential_loss: nll
+  ranknet: true
+  q_distillation: false
+  temporal: kf
+  graph_diffusion: true
+  hierarchy: true
+  fuse_uncertainty: true
+
+teacher:
+  checkpoint: auto
+  labels_root: auto
+  checkpoint_step: 100000
+  horizon: 6
+  gamma: 0.95
+  all_candidates: true
+  validation_rollouts: 4
+  deterministic: true
+  label_shard_size: 1024
+  label_actors: 32
+  label_states_per_task: 4
+
+loss:
+  potential_weight: 0.2
+  region_potential_weight: 0.5
+  rank_weight: 0.05
+  q_distill_weight: 0.1
+  warmup_steps: 10000
+  ramp_steps: 20000
+  rank_tie_delta_std: 0.1
+  rank_pairs_per_state: 64
+
+filter:
+  p0: 1.0
+  q_stable: 0.01
+  q_event: 0.25
+  r_min: 0.001
+  r_max: 10.0
+  nis_threshold: 6.63
+  ttl_steps: 32
+  ema_alpha: 0.3
+  reset_on_visit: true
+  calibration_path: auto
+  calibration_temperature: 1.0
+  require_calibration: true
+  gru_checkpoint: auto
+  gru_hidden_dim: 16
+  require_gru_checkpoint: true
+
+graph_context:
+  diffusion_scales: [1, 2, 4]
+  local_budget: 192
+  region_budget: 32
+  region_size_m: 16.0
+
+train:
+  # Formal comparisons stop at the same transition budget. ``episodes`` is a
+  # safety ceiling only; it is intentionally much larger than the budget needs.
+  episodes: 1000000
+  max_environment_steps: 1000000
+  gradient_updates_per_transition: 0.0625
+  replay_size: 10000
+  minimum_replay: 2000
+  global_batch_size: 128
+  micro_batch_size: 32
+  learning_rate: 0.00001
+  alpha_learning_rate: 0.0001
+  gamma: 1.0
+  tau: 1.0
+  target_update_interval: 64
+  checkpoint_seconds: 300
+  checkpoint_episodes: 32
+  calibration_phase_steps: 30000
+  max_grad_norm_actor: 100.0
+  max_grad_norm_critic: 20000.0
+  bf16: true
+  ddp_sync_check_interval: 100
+  rollout_backend: ray
+  ray_address: local
+  ray_cpus_per_actor: 1.0
+  ray_actor_limit: 0
+  ray_actors_by_world_size: {1: 24, 2: 32, 3: 40, 4: 48}
+
+gpu_scheduler:
+  policy: prefer-idle
+  min_gpus: 1
+  max_gpus: 4
+  min_free_memory_gib: 18.0
+  memory_reserve_gib: 6.0
+  max_utilization_pct: 65
+  max_temperature_c: 80
+  idle_used_memory_mib: 512
+  idle_utilization_pct: 10
+  monitor_seconds: 30
+  pressure_grace_checks: 2
+  wait_seconds: 60
+  micro_batch_candidates: [32, 16, 8, 4]
+
+evaluation:
+  seeds_main: [0, 1, 2, 3, 4]
+  seeds_ablation: [0, 1, 2]
+  bootstrap_samples: 10000
+  confidence: 0.95
+  fixed_latency_device: cuda:0
+  potential_diagnostics: true
+  potential_diagnostic_steps: 16
+  potential_diagnostic_interval: 4

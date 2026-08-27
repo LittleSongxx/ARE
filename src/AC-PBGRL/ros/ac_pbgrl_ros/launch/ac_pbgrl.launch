@@ -1,0 +1,17 @@
+<launch>
+  <arg name="model_path" default="$(env HOME)/ac_pbgrl/model/full.onnx"/>
+  <arg name="runtime_pythonpath" default="$(find ac_pbgrl_ros)/../../.runtime/ros_python"/>
+  <arg name="map_topic" default="/projected_map"/>
+  <arg name="odometry_topic" default="/state_estimation"/>
+  <arg name="waypoint_topic" default="/way_point"/>
+  <node pkg="ac_pbgrl_ros" type="planner_node.py" name="ac_pbgrl_planner" output="screen">
+    <env name="PYTHONPATH" value="$(arg runtime_pythonpath):$(env PYTHONPATH)"/>
+    <param name="model_path" value="$(arg model_path)"/>
+    <param name="map_topic" value="$(arg map_topic)"/>
+    <param name="odometry_topic" value="$(arg odometry_topic)"/>
+    <param name="waypoint_topic" value="$(arg waypoint_topic)"/>
+    <param name="planning_rate" value="1.0"/>
+    <param name="node_resolution" value="4.0"/>
+    <param name="sensor_range" value="16.0"/>
+  </node>
+</launch>
