@@ -97,7 +97,7 @@ pilot 的运行名与正式运行名相同，例如 `runs/full/seed_0`。如果 
 - 修复后的首 shard（包含 Ray 初始化）耗时约 11 分钟，即约 1.53 samples/s；据此 train 20k 粗估约 3.6 小时，validation 粗估约 22 分钟，应以后续 shard 实测继续校正。
 - watchdog ID：`pilot`。
 - 调度硬限制：`ACPBGRL_GPU_ALLOWLIST=0,3`。
-- 标签阶段是 CPU-only，GPU 0/3 当前空闲；进入训练后仍只允许使用物理 GPU 0 和 3，两张卡在更新时各约占 27.5 GiB。
+- 标签阶段是 CPU-only，GPU 0/3 当时空闲；当前训练仍只允许使用物理 GPU 0 和 3，两张卡在更新时各约占 27.5 GiB。
 - GPU 1 和 2 上存在其他用户的约 12 GiB 进程，本项目不得探测训练显存、租用或启动在这两张卡上。
 - 标签阶段的 label driver 与 32 个 Ray `LabelWorker` 已正常退出；最终标签产物已完整固化。
 - 标签 Ray runtime 只发布了 32 CPU、0 GPU；worker niceness 为 0，affinity 为 `0-95`，未再出现全部拥挤在 `0,48` 的问题。
