@@ -146,6 +146,16 @@ nohup setsid ./scripts/server_watchdog.sh paper --pilot-only \
 
 pilot 复用正式运行名与 checkpoint；若结果通过，后续正式 1M 流程从 500k 继续，而不是重新训练。配对评测与图表分别写入 `pilot/step_200000` 和 `pilot/step_500000`。
 
+如果当前只需要检查优化方向、暂不投入多种子，可显式运行单次筛选。它仍完整经历 200k 诊断、500k auxiliary schedule 和相同的 100-map 配对评测，但只训练 seed 0：
+
+```bash
+./scripts/server_watchdog.sh paper --pilot-only --single-run-screening \
+  --pilot-seeds 1 --pilot-early-steps 200000 --pilot-steps 500000 \
+  --gpus auto --gpu-policy prefer-idle
+```
+
+单次筛选的 manifest 会标记 `single_run_directional_screening`，只能用于判断实现是否稳定、效果方向是否值得继续，不能替代论文级多种子统计。未提供 `--single-run-screening` 时，可信 pilot 仍强制至少 3 个独立 seed。
+
 无 root 权限的服务器可把同一命令写入用户 crontab 的 `@reboot`，并额外每分钟调用一次作为 watchdog 自身的兜底；重复调用会因项目锁立即退出。安装前应使用绝对路径，并把 stdout/stderr 重定向到 `/mnt`，不要在 crontab 或 Git 中保存 SSH 密码。
 
 ## 数据与产物

@@ -125,6 +125,11 @@ def build_parser() -> argparse.ArgumentParser:
     paper.add_argument("--gpu-policy", default="prefer-idle")
     paper.add_argument("--label-samples", type=int, default=100000)
     paper.add_argument("--pilot-only", action="store_true")
+    paper.add_argument(
+        "--single-run-screening",
+        action="store_true",
+        help="allow exactly one pilot seed for directional screening without statistical claims",
+    )
     paper.add_argument("--pilot-seeds", type=int, default=3)
     paper.add_argument("--pilot-early-steps", type=int, default=200000)
     paper.add_argument("--pilot-steps", type=int, default=500000)
@@ -621,6 +626,31 @@ def _minimum_pilot_environment_steps(config) -> int:
     return int(math.ceil(scheduled_updates / update_ratio))
 
 
+def _pilot_evidence_level(
+    seed_count: int,
+    *,
+    single_run_screening: bool,
+    available_seed_count: int,
+) -> str:
+    """Validate the requested pilot replication level and name its evidence tier."""
+
+    seed_count = int(seed_count)
+    if seed_count <= 0:
+        raise ValueError("pilot seed count must be positive")
+    if seed_count > int(available_seed_count):
+        raise ValueError("pilot seed count exceeds the registered main-suite seeds")
+    if bool(single_run_screening):
+        if seed_count != 1:
+            raise ValueError("single-run screening requires exactly one pilot seed")
+        return "single_run_directional_screening"
+    if seed_count < 3:
+        raise ValueError(
+            "a credibility pilot requires at least three independent seeds; "
+            "use --single-run-screening with --pilot-seeds 1 for a direction-only check"
+        )
+    return "multi_seed_credibility_pilot"
+
+
 def command_ablate(args) -> int:
     suite_path = CONFIG_ROOT / "suites" / f"{args.suite}.yaml"
     suite = yaml.safe_load(suite_path.read_text(encoding="utf-8"))
@@ -659,15 +689,18 @@ def command_paper(args) -> int:
     suite = yaml.safe_load((CONFIG_ROOT / "suites" / "main.yaml").read_text(encoding="utf-8"))
     main_seeds = [int(value) for value in suite["main"]["seeds"]]
     ablation_seeds = [int(value) for value in suite["ablations"]["seeds"]]
+    if bool(args.single_run_screening) and not bool(args.pilot_only):
+        raise ValueError("--single-run-screening requires --pilot-only")
     if bool(args.pilot_only):
         pilot_seed_count = int(args.pilot_seeds)
         pilot_early_steps = int(args.pilot_early_steps)
         pilot_steps = int(args.pilot_steps)
         required_steps = _minimum_pilot_environment_steps(config)
-        if pilot_seed_count < 3:
-            raise ValueError("a credibility pilot requires at least three independent seeds")
-        if pilot_seed_count > len(main_seeds):
-            raise ValueError("pilot seed count exceeds the registered main-suite seeds")
+        pilot_evidence_level = _pilot_evidence_level(
+            pilot_seed_count,
+            single_run_screening=bool(args.single_run_screening),
+            available_seed_count=len(main_seeds),
+        )
         if pilot_early_steps <= 0 or pilot_early_steps >= pilot_steps:
             raise ValueError("pilot_early_steps must be positive and smaller than pilot_steps")
         if pilot_steps < required_steps:
@@ -941,10 +974,24 @@ def command_paper(args) -> int:
             )
             if result:
                 return result
+            if bool(args.single_run_screening):
+                stage_kind = (
+                    "single_run_early_diagnostic"
+                    if stage_steps == pilot_early_steps
+                    else "single_run_screening"
+                )
+            else:
+                stage_kind = (
+                    "early_diagnostic"
+                    if stage_steps == pilot_early_steps
+                    else "credibility_pilot"
+                )
             atomic_write_json(
                 stage_root / "manifest.json",
                 {
-                    "kind": "early_diagnostic" if stage_steps == pilot_early_steps else "credibility_pilot",
+                    "kind": stage_kind,
+                    "evidence_level": pilot_evidence_level,
+                    "statistical_claims_supported": False,
                     "methods": ["ariadne_pi", "full"],
                     "seeds": pilot_seeds,
                     "environment_steps_per_run": stage_steps,

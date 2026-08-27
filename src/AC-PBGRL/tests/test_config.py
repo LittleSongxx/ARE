@@ -1,8 +1,14 @@
 from pathlib import Path
 
+import pytest
 import yaml
 
-from ac_pbgrl.cli import _minimum_pilot_environment_steps, _suite_entries, build_parser
+from ac_pbgrl.cli import (
+    _minimum_pilot_environment_steps,
+    _pilot_evidence_level,
+    _suite_entries,
+    build_parser,
+)
 from ac_pbgrl.config import CONFIG_ROOT, config_fingerprint, load_config, parse_overrides
 from ac_pbgrl.runtime.manifest import build_run_manifest, save_run_manifest
 
@@ -57,10 +63,28 @@ def test_credibility_pilot_defaults_cover_full_auxiliary_schedule():
     config = load_config("full")
 
     assert args.pilot_seeds == 3
+    assert args.single_run_screening is False
     assert args.pilot_early_steps == 200000
     assert args.pilot_steps == 500000
     assert _minimum_pilot_environment_steps(config) == 480000
     assert args.pilot_early_steps < _minimum_pilot_environment_steps(config) <= args.pilot_steps
+
+
+def test_single_run_screening_is_explicit_and_exactly_one_seed():
+    args = build_parser().parse_args(
+        ["paper", "--pilot-only", "--single-run-screening", "--pilot-seeds", "1"]
+    )
+
+    assert args.single_run_screening is True
+    assert _pilot_evidence_level(
+        args.pilot_seeds,
+        single_run_screening=args.single_run_screening,
+        available_seed_count=5,
+    ) == "single_run_directional_screening"
+    with pytest.raises(ValueError, match="at least three independent seeds"):
+        _pilot_evidence_level(1, single_run_screening=False, available_seed_count=5)
+    with pytest.raises(ValueError, match="exactly one"):
+        _pilot_evidence_level(2, single_run_screening=True, available_seed_count=5)
 
 
 def test_invalid_override_is_rejected():
