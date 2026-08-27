@@ -137,6 +137,19 @@ def test_calibration_loader_preserves_variance_decomposition(tmp_path: Path):
     assert region == action == 2.0
 
 
+def test_calibration_samples_validation_states_without_replacement():
+    from ac_pbgrl.learning.calibration import calibration_sample_indices
+
+    full = calibration_sample_indices(dataset_size=17, samples=17, seed=1907)
+    subset = calibration_sample_indices(dataset_size=17, samples=8, seed=1907)
+
+    assert sorted(full.tolist()) == list(range(17))
+    assert len(np.unique(subset)) == 8
+    assert np.array_equal(subset, calibration_sample_indices(17, 8, 1907))
+    with pytest.raises(ValueError, match="positive"):
+        calibration_sample_indices(17, 0, 1907)
+
+
 def test_gru_control_uses_trained_log_variance_parameterization():
     memory = GRUPotentialMemory(hidden_dim=4, ttl_steps=8, seed=1)
     with torch.no_grad():

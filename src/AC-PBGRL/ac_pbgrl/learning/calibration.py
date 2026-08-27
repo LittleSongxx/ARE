@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 from pathlib import Path
 
@@ -12,6 +13,18 @@ from ac_pbgrl.evaluation.evaluator import load_actor
 from ac_pbgrl.evaluation.metrics import uncertainty_metrics
 from ac_pbgrl.models.temporal import VarianceCalibrator
 from ac_pbgrl.utils import atomic_write_json, sha256_file
+
+
+def calibration_sample_indices(dataset_size: int, samples: int, seed: int) -> np.ndarray:
+    """Select a deterministic held-out subset without duplicate states."""
+    dataset_size = int(dataset_size)
+    samples = int(samples)
+    if dataset_size <= 0:
+        raise ValueError("calibration label split is empty")
+    if samples <= 0:
+        raise ValueError("calibration sample count must be positive")
+    count = min(samples, dataset_size)
+    return np.random.default_rng(int(seed)).choice(dataset_size, size=count, replace=False)
 
 
 def default_calibration_path(config: Config) -> Path:
@@ -43,15 +56,15 @@ def fit_variance_calibration(
     dataset = LabelDataset(label_root, split)
     if len(dataset) <= 0:
         raise ValueError("calibration label split is empty")
+    if int(batch_size) <= 0:
+        raise ValueError("calibration batch size must be positive")
     actor = load_actor(config, checkpoint, device)
-    rng = np.random.default_rng(1907 + int(config.project.seed))
+    sampling_seed = 1907 + int(config.project.seed)
+    sample_indices = calibration_sample_indices(len(dataset), samples, sampling_seed)
     means, action_variances, region_variances, targets = [], [], [], []
-    remaining = min(int(samples), len(dataset))
-    while remaining > 0:
-        size = min(int(batch_size), remaining)
-        batch = dataset.sample(
-            size,
-            rng,
+    for start in range(0, len(sample_indices), int(batch_size)):
+        batch = dataset.batch(
+            sample_indices[start : start + int(batch_size)],
             hierarchy=bool(config.method.hierarchy),
             local_budget=int(config.graph_context.local_budget),
             region_budget=int(config.graph_context.region_budget),
@@ -63,7 +76,6 @@ def fit_variance_calibration(
         action_variances.append(output.action_log_variance[mask].float().exp().cpu().numpy())
         region_variances.append(output.region_log_variance[mask].float().exp().cpu().numpy())
         targets.append(batch.future_gain[mask].float().cpu().numpy())
-        remaining -= size
     mean = np.concatenate(means)
     action_variance = np.concatenate(action_variances)
     region_variance = np.concatenate(region_variances)
@@ -87,8 +99,13 @@ def fit_variance_calibration(
         "method": str(config.project.experiment),
         "seed": int(config.project.seed),
         "split": split,
-        "states": min(int(samples), len(dataset)),
+        "states": int(len(sample_indices)),
         "action_targets": int(len(target)),
+        "sampling": "deterministic_without_replacement",
+        "sampling_seed": sampling_seed,
+        "sample_indices_sha256": hashlib.sha256(
+            np.asarray(sample_indices, dtype="<i8").tobytes()
+        ).hexdigest(),
         "temperature": float(region_temperature),
         "region_temperature": float(region_temperature),
         "region_temperature_unconstrained": float(unconstrained_region_temperature),
