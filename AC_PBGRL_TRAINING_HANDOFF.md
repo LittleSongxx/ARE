@@ -1,8 +1,9 @@
 # AC-PBGRL 论文训练与监控 Handoff
 
-最后更新：2026-08-27 19:38（Asia/Shanghai）
+最后更新：2026-08-27 19:50（Asia/Shanghai）
 当前分支：`dev_kf`  
 核心实现基线：`53f80932`
+最新流水线计划测试：`c3c64d75`
 当前工作范围：只关注真实论文算法、二维训练、配对评测与实验可靠性；PPT 工作已经结束。
 
 ## 1. 本轮任务是什么
@@ -90,7 +91,7 @@ pilot 的运行名与正式运行名相同，例如 `runs/full/seed_0`。如果 
 
 - 共享 `ariadne_pi` teacher 已完成并固化到 100,000 environment transitions、6,125 optimizer updates、807 episodes；checkpoint 与 replay 的 `total_added` 都是 100,000。
 - 当前 stage：使用固定 teacher 生成 20,000 个 train future-gain 标签；完成后会自动生成 2,048 个 validation 标签。
-- train manifest 已达到 6,144 samples / 6 shards；已抽检的前两个 shard 中所有有效候选标签均为有限值，teacher/map-split provenance 哈希一致。
+- train manifest 已达到 7,168 samples / 7 shards；已抽检的前两个 shard 与最新 `shard_00006.h5` 中所有有效候选标签均为有限值，teacher/map-split provenance 哈希一致。
 - 修复后的首 shard（包含 Ray 初始化）耗时约 11 分钟，即约 1.53 samples/s；据此 train 20k 粗估约 3.6 小时，validation 粗估约 22 分钟，应以后续 shard 实测继续校正。
 - watchdog ID：`pilot`。
 - 调度硬限制：`ACPBGRL_GPU_ALLOWLIST=0,3`。
@@ -99,8 +100,9 @@ pilot 的运行名与正式运行名相同，例如 `runs/full/seed_0`。如果 
 - watchdog、paper driver、label driver 和 32 个 Ray `LabelWorker` 均已确认存在。
 - 标签 Ray runtime 只发布 32 CPU、0 GPU；worker niceness 为 0，affinity 为 `0-95`，不会再全部拥挤在 `0,48`。
 - watchdog heartbeat 每 30 秒更新，且 cron 同时配置 `@reboot` 与每分钟兜底调用，因此本地 terminal、SSH 或 Codex 对话关闭不会终止训练。
-- 远端完整测试：44 passed。
-- 本地测试：27 passed、1 skipped；跳过原因是本地宿主 Python 没装 PyTorch，不是代码失败。
+- 远端完整测试：45 passed。
+- 本地测试：28 passed、1 skipped；跳过原因是本地宿主 Python 没装 PyTorch，不是代码失败。
+- `c3c64d75` 增加了端到端 mocked paper-driver 计划测试，锁定单次模式的精确顺序，并明确断言不会启动 seed `1` 或消融 run。
 
 远端连接地址、用户名、密码和私有绝对路径按项目约束不写入 Git。新会话应从用户提供的连接信息或本机 SSH config 获取；若信息不可见，应重新向用户索取。禁止把认证信息加入命令脚本、README、handoff、Git history 或日志。
 
@@ -262,6 +264,7 @@ ac916582  restrict scheduler to approved GPU indices
 5df4f15d  restore CPU scheduling for label workers
 abf8a710  add explicit single-run screening mode
 53f80932  keep single-run figures descriptive
+c3c64d75  lock the single-run paper-driver plan in regression tests
 ```
 
 ### DDP graceful-stop rank race
