@@ -8,6 +8,7 @@ from ac_pbgrl.cli import (
     _pilot_evidence_level,
     _suite_entries,
     build_parser,
+    command_paper,
 )
 from ac_pbgrl.config import CONFIG_ROOT, config_fingerprint, load_config, parse_overrides
 from ac_pbgrl.runtime.manifest import build_run_manifest, save_run_manifest
@@ -85,6 +86,85 @@ def test_single_run_screening_is_explicit_and_exactly_one_seed():
         _pilot_evidence_level(1, single_run_screening=False, available_seed_count=5)
     with pytest.raises(ValueError, match="exactly one"):
         _pilot_evidence_level(2, single_run_screening=True, available_seed_count=5)
+
+
+def test_single_run_screening_plans_only_seed_zero_and_descriptive_figures(
+    tmp_path, monkeypatch
+):
+    from ac_pbgrl import cli
+
+    config = load_config("full", overrides=[f"project.data_root={tmp_path}"])
+    teacher = tmp_path / "teachers/ariadne_pi" / f"step_{config.teacher.checkpoint_step}.pt"
+    teacher.parent.mkdir(parents=True)
+    teacher.touch()
+    (tmp_path / "map_splits.json").write_text("{}", encoding="utf-8")
+    calls = []
+
+    def fake_call(command, **kwargs):
+        arguments = list(command[1:])
+        calls.append(arguments)
+        if arguments[0] == "calibrate":
+            artifact = tmp_path / "calibration/full/seed_0.json"
+            artifact.parent.mkdir(parents=True, exist_ok=True)
+            artifact.write_text("{}", encoding="utf-8")
+        return 0
+
+    monkeypatch.setattr(cli, "load_config", lambda *args, **kwargs: config)
+    monkeypatch.setattr(cli.subprocess, "call", fake_call)
+    args = build_parser().parse_args(
+        [
+            "paper",
+            "--pilot-only",
+            "--single-run-screening",
+            "--pilot-seeds",
+            "1",
+            "--pilot-early-steps",
+            "200000",
+            "--pilot-steps",
+            "500000",
+            "--gpus",
+            "cpu",
+        ]
+    )
+
+    assert command_paper(args) == 0
+    assert all("project.seed=1" not in call for call in calls)
+    assert all("seed_1" not in item for call in calls for item in call)
+
+    supervise = [call for call in calls if call[0] == "supervise"]
+    stages = [
+        (
+            next(item for item in call if item.startswith("project.run_name=")),
+            next(item for item in call if item.startswith("train.max_environment_steps=")),
+        )
+        for call in supervise
+    ]
+    assert stages == [
+        ("project.run_name=ariadne_pi/seed_0", "train.max_environment_steps=200000"),
+        ("project.run_name=full/seed_0", "train.max_environment_steps=30000"),
+        ("project.run_name=full/seed_0", "train.max_environment_steps=200000"),
+        ("project.run_name=ariadne_pi/seed_0", "train.max_environment_steps=500000"),
+        ("project.run_name=full/seed_0", "train.max_environment_steps=500000"),
+    ]
+
+    evaluations = [call for call in calls if call[0] == "evaluate"]
+    assert len(evaluations) == 4
+    assert all(call[call.index("--seeds") + 1] == "0" for call in evaluations)
+    figures = [call for call in calls if call[0] == "figures"]
+    assert len(figures) == 2
+    assert all(
+        call[call.index("--evidence-level") + 1] == "single_run_directional_screening"
+        for call in figures
+    )
+    assert not any(call[0] == "ablate" for call in calls)
+
+    for step, kind in ((200000, "single_run_early_diagnostic"), (500000, "single_run_screening")):
+        manifest = yaml.safe_load((tmp_path / f"pilot/step_{step}/manifest.json").read_text())
+        assert manifest["kind"] == kind
+        assert manifest["evidence_level"] == "single_run_directional_screening"
+        assert manifest["seeds"] == [0]
+        assert manifest["methods"] == ["ariadne_pi", "full"]
+        assert manifest["statistical_claims_supported"] is False
 
 
 def test_invalid_override_is_rejected():
