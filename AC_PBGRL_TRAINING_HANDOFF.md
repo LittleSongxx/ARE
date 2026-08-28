@@ -87,10 +87,10 @@ pilot 的运行名与正式运行名相同，例如 `runs/full/seed_0`。如果 
 
 ## 4. 当前服务器状态快照
 
-本节是 2026-08-28 09:12 左右的快照，PID 和数值会变化，接手后必须重新查询，不可依赖这里的 PID。
+本节是 2026-08-28 10:39 左右的快照，PID 和数值会变化，接手后必须重新查询，不可依赖这里的 PID。
 
 - 共享 `ariadne_pi` teacher 已完成并固化到 100,000 environment transitions、6,125 optimizer updates、807 episodes；checkpoint 与 replay 的 `total_added` 都是 100,000。
-- 当前 stage：train/validation future-gain 标签与 `ariadne_pi/seed_0` 200k 均已完成；全新 `full/seed_0` 已完成 30k `method.temporal=none` prephase 和正式无放回 validation calibration，当前用 `method.temporal=kf` 无损续训至 200k。已审计的最新完整 checkpoint 为 153,292 transitions；紧随其后的 rollout 已推进到 159,330 transitions 并进入下一轮更新。
+- 当前 stage：train/validation future-gain 标签与 `ariadne_pi/seed_0` 200k 均已完成；全新 `full/seed_0` 已完成 30k `method.temporal=none` prephase 和正式无放回 validation calibration，当前用 `method.temporal=kf` 无损续训至 200k。已审计的最新完整 checkpoint 为 183,472 transitions；紧随其后的 rollout 已推进到 189,563 transitions，并正在执行缓存优化后的第三个非零辅助更新波。
 - train manifest 已完成 20,000 samples / 20 shards（19 × 1,024 + 544）；最终聚合审计确认全部 325,820 个有效候选标签、node/edge features 与 mask 均通过完整性检查，teacher/map-split provenance 哈希一致。
 - 最终 train 标签分布未退化：均值 `-0.832`、标准差 `0.761`、范围 `[-3.746, 2.913]`，按六位小数约有 208,225 个唯一值。
 - validation manifest 已完成 2,048 samples / 2 shards，共 33,414 个有效动作标签；全部 510 张 validation 地图均来自 validation split，与 train/OOD/IID-test 的地图重叠为 0，provenance 与 train 完全一致。
@@ -98,7 +98,7 @@ pilot 的运行名与正式运行名相同，例如 `runs/full/seed_0`。如果 
 - watchdog ID：`pilot`。
 - 调度硬限制：`ACPBGRL_GPU_ALLOWLIST=0,3`。
 - 标签阶段是 CPU-only，GPU 0/3 当时空闲；训练仍只允许使用物理 GPU 0 和 3。此前 `ariadne_pi` 更新时每卡约 27.5 GiB，当前 `full` 更新时每卡约 21.0 GiB。
-- GPU 1 上存在其他用户的约 12 GiB 进程；GPU 2 在最新快照中虽空闲，但两者都不在用户授权的 allowlist 内，本项目不得租用或启动在这两张卡上。
+- GPU 1/2 上分别存在其他用户的约 12 GiB 进程；两者都不在用户授权的 allowlist 内，本项目不得租用、启动或结束这两张卡上的进程。
 - 标签阶段的 label driver 与 32 个 Ray `LabelWorker` 已正常退出；最终标签产物已完整固化。
 - 标签 Ray runtime 只发布了 32 CPU、0 GPU；worker niceness 为 0，affinity 为 `0-95`，未再出现全部拥挤在 `0,48` 的问题。
 - watchdog heartbeat 每 30 秒更新，且 cron 同时配置 `@reboot` 与每分钟兜底调用，因此本地 terminal、SSH 或 Codex 对话关闭不会终止训练。
@@ -132,10 +132,17 @@ pilot 的运行名与正式运行名相同，例如 `runs/full/seed_0`。如果 
 - 75% 后首个完整 checkpoint 精确为 `environment_steps=153,292`、`update_step=9,455`、`update_credit=0.75`、`episodes=1,247`、`target_counter=47`，内嵌 replay 与更新预算完全对齐；1,236 个浮点/复数张量、15,435,045 个元素全部有限，双 Q 84/84 个可比张量均不同，四类 optimizer step 均为 9,455。Actor/Q1/Q2 的 L2 范数为 `67.41/66.13/66.18`，最大绝对参数为 `1.007/1.023/1.026`，与 54k～147k 检查点几乎不变；`latest.pt` SHA256 为 `b54f9419f3a4763269e31186ef5e967e5b32a40a7671679b70032554215b65e5`。
 - 153k aggregate 为 Q loss `19.55/19.53`、Q gradient `4,586.11`、target `54.78`、entropy `2.632`、alpha `0.396`，auxiliary weight 仍为 0。Q gradient 曾在 141k 达 `5,212.66`，随后回落；同时 Q loss/target 持续下降且参数范数稳定，因此现有证据支持较高输入/雅可比尺度而非权重爆炸，但仍应继续监控 20,000 保护阈值。
 - 紧随 153k checkpoint 的 rollout 将磁盘 replay 推进到 159,330；环内 actor state/next-state 分别有 148,278/148,019 个有效 posterior 动作，mean/variance 全部有限且 variance 严格为正，平均方差约 `0.9299/0.9232`。截至该 rollout 的 1,322 条 metrics、25,726 个数值字段全部有限；最早 192 个训练 episode 成功率/平均覆盖率/平均回报为 `3.1%/0.593/-49.40`，最近 192 个为 `11.5%/0.701/-45.45`，最近 48 个为 `10.4%/0.668/-46.78`。近期在线轨迹未坍缩但也不是单调改善，不能据此替代固定评测。
-- `loss.warmup_steps=10,000` 且 ramp 在恰好 10,000 时仍为零；`requires_offline_potential_batch()` 每个 optimizer update 重新计算权重，所以第一次真正读取离线标签并产生非零监督的是进入 update 时 `update_step=10,001`。159,330-transition 波次预计结束于 `update_step=9,833`，仍全部走零权重快路径；下一 rollout 后的更新波会在中途跨过该边界。届时必须保留非零损失，并重点监控 hierarchy BFS/A* 恢复后的 CPU/GPU 吞吐。
-- 远端发布目录不带 `.git` 元数据；本次修改的 `learning/calibration.py` 与回归测试 SHA256 已和本地逐项核对完全一致，其他既有关键发布文件未改动。
+- `loss.warmup_steps=10,000` 且 ramp 在恰好 10,000 时仍为零；`requires_offline_potential_batch()` 每个 optimizer update 重新计算权重，所以第一次真正读取离线标签并产生非零监督的是进入 update 时 `update_step=10,001`。159,330-transition checkpoint 精确为 `update_step=9,833`；下一 rollout 的 165,371-transition 波次按预期在第 169 次循环首次产生非零辅助监督，最终为 `update_step=10,210`、`update_credit=0.6875`。该波 aggregate 的 auxiliary weight 为 `0.00116419`，offline potential/region/rank loss 为 `0.06621/0.08286/0.35922`，Q loss `20.86/21.08`、Q gradient `5,672.01`、target `58.37`，全部有限；checkpoint 的 1,236 个浮点/复数张量、15,435,045 个元素全部有限，双 Q 84/84 不同，SHA256 为 `fe2d601bfb4ebfc1290e490e8cefea57e3e9c6039a32c76bdc893eb1933b63ae`。
+- 随后的 171,405-transition 全非零波次精确为 `update_step=10,587`、`update_credit=0.8125`，aggregate 的 auxiliary weight `0.00796`、Q loss `19.78/19.81`、Q gradient `4,326.57`、target `54.18`，offline potential/region/rank loss `0.03483/0.05329/0.61816`，全部有限。checkpoint/replay 完全对齐，1,236 个张量无非有限值，双 Q 84/84 不同，四组 optimizer step 全为 10,587，SHA256 为 `b42ca35b8fae8371bc16c30c1b4fe6faf34d03a82a06372e61e8527515b573aa`。
+- 非零监督恢复后复现出 CPU 标签读取瓶颈。真实 64-sample profile 为无 hierarchy `1.883s`、带 hierarchy `2.279s`；其中 HDF5 随机读取/重复解压约 `1.88s`，层级图上下文约 `0.40s`，因此最初怀疑的 BFS/A* 不是主要占比。train 标签压缩后仅约 24 MiB，但 20 个 shard 解码后每 rank 精确为 `2.650 GiB`，服务器当时约有 450 GiB 可用内存。
+- `90705256` 增加有上限的 per-process decoded-shard LRU；portable 默认关闭，`server_a40` 明确缓存当前全部 20 个 train shard，不改变索引、标签、hierarchy、loss 或 optimizer 语义。真实标签上随机、跨 shard 和重复索引的三批状态张量、action-preserving compaction metadata 与 future-gain 均逐元素一致（含 NaN mask）；单进程首次装入全部 shard 约 `7.55s`，热缓存 hierarchy batch 为 `0.51～0.61s`。本地仍为 28 passed / 1 skipped；远端隔离目录和实际发布目录 CPU-only 全套均为 49 passed。提交已推送，5 个发布文件同步前与上一提交完全一致、同步后 SHA256 与本地完全一致。
+- 部署时严格走 checkpoint-aware restart：临时移除 cron，只向 PID 文件与完整命令共同核验的 watchdog 发 SIGTERM；supervisor 以 request file 等待整个 171,405 波次结束，没有信号直接打到 rank。`latest.pt/interrupted.pt` 原子写入且整棵进程树退出后才恢复原 cron；没有 orphaned replay/metrics、OOM、NCCL 或资源压力事件。新 watchdog 先对已完成 `ariadne_pi` 做无新增 transition 的完成性检查，再从 171,405 无损恢复 `full`，resolved config 与 run manifest 均记录 `label_cache_shards: 20`。
+- 缓存版首个完整波次从 177,328-transition rollout 的 `10:09:50.943` 到 aggregate 的 `10:22:09.696`，371 updates 用时 `738.753s`，即 `1.991s/update`；相邻旧全非零波次从 171,405 rollout 到 aggregate，377 updates 用时 `1,382.188s`，即 `3.666s/update`。按 update 归一化后吞吐提升约 `1.84×`，整波墙钟缩短约 `46.5%`；两秒 GPU 采样中两卡同时为零从旧路径约 6/10 降为缓存路径 1/15。缓存 checkpoint 精确为 `environment_steps=177,328`、`episodes=1,439`、`update_step=10,958`、`update_credit=0`、`target_counter=14`；aggregate 的 auxiliary weight `0.01544`、Q loss `18.61/18.41`、Q gradient `4,842.84`、target `51.28`，全部有限。1,236 个张量无非有限值，Actor/Q1/Q2 L2 范数 `67.46/66.15/66.20`，SHA256 为 `10e15f2690d1a55b248efc48b6fa3bf6a24291a7721e7e2821e508a590166702`。
+- 第二个热缓存波次从 183,472-transition rollout 的 `10:23:07.762` 到 aggregate 的 `10:35:41.851`，384 updates 用时 `754.089s`，即 `1.964s/update`，与首波 `1.991s/update` 一致并略快，确认吞吐改善不是一次性冷启动偶然。该 checkpoint 精确为 `environment_steps=183,472`、`episodes=1,487`、`update_step=11,342`、`update_credit=0`、`target_counter=14`；aggregate 的 auxiliary weight `0.02299`、Q loss `17.35/17.22`、Q gradient `5,394.05`、target `54.02`，offline potential/region/rank loss `0.01068/0.01950/0.61159`，全部有限。1,236 个浮点/复数张量、15,435,045 个元素全部有限，双 Q 84/84 不同，四组 optimizer step 全为 11,342；Actor/Q1/Q2 L2 范数为 `67.47/66.15/66.21`，最大绝对参数为 `1.008/1.024/1.026`，SHA256 为 `32e75a11c5843749e825e3569150f826df8ea569149a1a8f7c6c8f7c4b702fc1`。
+- 两个 rank 的热缓存 RSS 在第二波内稳定于约 `15.8/11.2～11.3` million KiB，没有随 update 持续增长；服务器仍约有 449 GiB available。连续 GPU 采样确认两张授权卡多次达到 `82%～100%`，显存各约 21.5 GiB，温度 `51～64°C`。截至该 checkpoint 的 1,567 条 metrics、30,656 个数值字段全部有限；紧随其后的 rollout 已将磁盘 replay 推进到 189,563 transitions，环内 state/next-state 分别有 152,715/152,347 个有效 posterior 动作，mean/variance 全部有限且 variance 严格为正。checkpoint 暂时落后一个 wave 属于正常设计，当前第三波更新已进入 GPU 计算。
+- 远端发布目录不带 `.git` 元数据；当前缓存修改与回归测试 SHA256 已和本地逐项核对完全一致，其他既有关键发布文件未改动。
 - supervisor 运行中每 30 秒检查资源压力；任一已选 GPU 连续 2 次严格高于配置上限 80°C 时，会写请求文件并等待当前 update 边界优雅 checkpoint/重启，而不是直接杀训练。单次读数等于 80°C 不触发；硬件 slowdown 阈值为 95°C。若发生重复温度重启，应先核对风道、外部 GPU 进程和 event 记录，再决定是否降低 micro-batch 或功耗，不能手工 kill rank。
-- 远端完整测试：47 passed。
+- 远端完整测试：49 passed。
 - 本地测试：28 passed、1 skipped；跳过原因是本地宿主 Python 没装 PyTorch，不是代码失败。
 - `c3c64d75` 增加了端到端 mocked paper-driver 计划测试，锁定单次模式的精确顺序，并明确断言不会启动 seed `1` 或消融 run。
 
@@ -405,7 +412,7 @@ pytest -q src/AC-PBGRL/tests --disable-warnings --maxfail=1
 
 按优先级：
 
-1. 继续监控 `full/seed_0` 从已审计的 153,292-transition KF checkpoint 无损续训到 200k，并保持物理 GPU allowlist `[0,3]`。继续关注 full 的裁剪前 Q gradient 相对 baseline 偏高但参数范数稳定的趋势；只有伴随非有限值、Q loss/target 持续爆炸、反复达到保护阈值或重复中断时才按故障处理。159,330-transition 波次预计结束于 `update_step=9,833`；下一波会在中途首次跨过 `update_step=10,001` 并恢复非零离线监督。若 hierarchy BFS/A* 使吞吐再次成为主要瓶颈，应优化为等价的并行/预计算路径，不能跳过非零损失。
+1. 继续监控 `full/seed_0` 从已审计的 183,472-transition KF checkpoint 无损续训到 200k，并保持物理 GPU allowlist `[0,3]`。当前 rollout 已到 189,563，正在执行部署缓存后的第三个全非零 wave；继续观察辅助权重 ramp、RSS 平台与 full 的裁剪前 Q gradient。只有伴随非有限值、Q loss/target 持续爆炸、反复达到 20,000 保护阈值、持续内存增长或重复中断时才按故障处理，不能跳过非零监督或修改正式 schedule。
 2. `full` 200k 完成后审计 checkpoint/replay/update budget、所有 metrics 有限性、KF posterior 与辅助损失，再进入固定 100-map 评测；不用在线训练 episode 代替固定地图效果判断。
 3. 两个 200k checkpoint 完成后，检查固定相同 100 张 IID 地图的两份 episode CSV、potential samples、paired effects、代表路径和 single-run manifest；只做工程/方向诊断。
 4. 流水线随后依次将 `ariadne_pi/seed_0` 和 `full/seed_0` 从 200k 无损续训到 500k；不修改正式 warm-up/ramp、标签定义或 map split，并在 full 500k 后重新校准。
