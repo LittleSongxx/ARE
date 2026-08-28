@@ -1,5 +1,8 @@
 # AC-PBGRL 论文训练与监控 Handoff
 
+> **状态覆盖（2026-08-28 16:29，Asia/Shanghai）：本文件记录的是已停止流水线的历史。**
+> `full@200k` 的 5 图行为预览出现明显负迁移，用户已要求停止全部服务器训练/评测并移除自动启动 cron。当前不得按本文件第 12 节续跑 500k。新窗口请以 [`AC_PBGRL_ALGORITHM_OPTIMIZATION_HANDOFF.md`](AC_PBGRL_ALGORITHM_OPTIMIZATION_HANDOFF.md) 为最新事实来源，先诊断和优化算法，未经用户再次明确授权不得恢复服务器任务。
+
 最后更新：2026-08-28 05:21（Asia/Shanghai）
 当前分支：`dev_kf`  
 核心实现基线：`4b89c704`
