@@ -109,6 +109,10 @@ train:
   ray_address: local
   ray_cpus_per_actor: 1.0
   ray_actor_limit: 0
+  # Decoded HDF5 shards can be cached per learner rank. Keep the portable
+  # default disabled; memory-rich systems may override this performance-only
+  # setting without changing labels or optimizer semantics.
+  label_cache_shards: 0
   # The host has 48 physical / 96 logical cores.  These values keep enough
   # headroom for the learner and other users while reducing synchronous
   # rollout tail latency.  They do not change the transition/update budget.

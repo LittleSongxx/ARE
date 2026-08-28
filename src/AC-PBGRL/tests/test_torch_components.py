@@ -108,6 +108,36 @@ def test_label_shards_feed_offline_potential_batch(tmp_path: Path):
     assert torch.isfinite(batch.future_gain[batch.future_gain_mask]).all()
 
 
+def test_label_shard_cache_preserves_random_batch_order_and_duplicates(tmp_path: Path):
+    environment = SyntheticGraphExplorationEnv(32, 8, seed=37)
+    with LabelShardWriter(tmp_path, "train", shard_size=1) as writer:
+        for episode in range(3):
+            state, _ = environment.reset()
+            labels = FutureGainLabeler(HeuristicTeacher(), horizon=2, gamma=0.95).label(environment, state)
+            writer.append(state, labels, {"episode": episode, "step": 0})
+
+    indices = np.asarray([2, 0, 2, 1], dtype=np.int64)
+    uncached = LabelDataset(tmp_path, "train")._read_rows(indices)
+    cached_dataset = LabelDataset(tmp_path, "train", cache_shards=2)
+    cached = cached_dataset._read_rows(indices)
+
+    assert cached.keys() == uncached.keys()
+    for name in cached:
+        assert np.array_equal(cached[name], uncached[name], equal_nan=True)
+    assert len(cached_dataset._shard_cache) == 2
+
+
+def test_label_shard_cache_rejects_negative_capacity(tmp_path: Path):
+    environment = SyntheticGraphExplorationEnv(32, 8, seed=41)
+    state, _ = environment.reset()
+    labels = FutureGainLabeler(HeuristicTeacher(), horizon=2, gamma=0.95).label(environment, state)
+    with LabelShardWriter(tmp_path, "train", shard_size=1) as writer:
+        writer.append(state, labels, {"episode": 0, "step": 0})
+
+    with pytest.raises(ValueError, match="cache_shards"):
+        LabelDataset(tmp_path, "train", cache_shards=-1)
+
+
 def test_exact_global_batch_schedule_for_three_ranks():
     schedules = [BatchSchedule(128, 3, rank, 32) for rank in range(3)]
     assert [item.local_samples for item in schedules] == [43, 43, 42]

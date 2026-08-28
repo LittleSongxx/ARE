@@ -311,7 +311,11 @@ def main(argv=None) -> int:
                 f"offline future-gain labels are required for potential training: {manifest}; "
                 "run './run.sh labels --split train' first"
             )
-        label_dataset = LabelDataset(label_root, "train")
+        label_dataset = LabelDataset(
+            label_root,
+            "train",
+            cache_shards=int(config.train.get("label_cache_shards", 0)),
+        )
         label_rng = np.random.default_rng(
             int(config.project.seed)
             + 7919 * context.rank

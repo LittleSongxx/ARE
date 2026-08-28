@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from collections import OrderedDict
 from pathlib import Path
 
 import h5py
@@ -121,12 +122,16 @@ class LabelShardWriter:
 
 
 class LabelDataset:
-    def __init__(self, root: str | Path, split: str) -> None:
+    def __init__(self, root: str | Path, split: str, *, cache_shards: int = 0) -> None:
         self.root = Path(root)
         manifest = json.loads((self.root / f"manifest_{split}.json").read_text(encoding="utf-8"))
         self.shards = manifest["shards"]
         self.length = int(manifest["samples"])
         self.cumulative = np.cumsum([int(item["samples"]) for item in self.shards])
+        if int(cache_shards) < 0:
+            raise ValueError("cache_shards must be non-negative")
+        self.cache_shards = min(int(cache_shards), len(self.shards))
+        self._shard_cache: OrderedDict[int, dict[str, np.ndarray]] = OrderedDict()
 
     def __len__(self) -> int:
         return self.length
@@ -160,10 +165,19 @@ class LabelDataset:
             positions = np.flatnonzero(shard_indices == shard_index)
             previous = 0 if shard_index == 0 else int(self.cumulative[shard_index - 1])
             rows = indices[positions] - previous
+            names = [f"state/{field}" for field in STATE_FIELDS] + ["labels/value", "labels/mask"]
+            cached = self._cached_shard(int(shard_index))
+            if cached is not None:
+                for name in names:
+                    values = cached[name][rows]
+                    if name not in output:
+                        output[name] = np.empty((len(indices),) + values.shape[1:], dtype=values.dtype)
+                    output[name][positions] = values
+                continue
+
             unique_rows, inverse = np.unique(rows, return_inverse=True)
             path = self.root / self.shards[int(shard_index)]["path"]
             with h5py.File(path, "r") as handle:
-                names = [f"state/{field}" for field in STATE_FIELDS] + ["labels/value", "labels/mask"]
                 for name in names:
                     # h5py requires increasing, duplicate-free fancy indices.
                     # Read only unique requested rows, then restore replacement
@@ -173,6 +187,22 @@ class LabelDataset:
                         output[name] = np.empty((len(indices),) + values.shape[1:], dtype=values.dtype)
                     output[name][positions] = values
         return output
+
+    def _cached_shard(self, shard_index: int) -> dict[str, np.ndarray] | None:
+        """Return a decoded shard from the bounded per-process LRU cache."""
+
+        if self.cache_shards <= 0:
+            return None
+        cached = self._shard_cache.pop(shard_index, None)
+        if cached is None:
+            path = self.root / self.shards[shard_index]["path"]
+            names = [f"state/{field}" for field in STATE_FIELDS] + ["labels/value", "labels/mask"]
+            with h5py.File(path, "r") as handle:
+                cached = {name: handle[name][...] for name in names}
+        self._shard_cache[shard_index] = cached
+        while len(self._shard_cache) > self.cache_shards:
+            self._shard_cache.popitem(last=False)
+        return cached
 
     def sample(
         self,
